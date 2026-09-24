@@ -150,20 +150,14 @@ class AutoPromptGUI:
         # Core components
         self.bridge = EditorBridge(editor="antigravity")
         self.engine = WorkflowEngine()
+        self.engines = {}
+        self.bridges = {}
         self.chatbot = AIChatbot()
         self._overlay: Optional[StepOverlay] = None
 
         # Bind engine callbacks
-        self.engine.on_step_start = self._on_step_start
-        self.engine.on_step_complete = self._on_step_complete
-        self.engine.on_workflow_done = self._on_workflow_done
-        self.engine.on_error = self._on_step_error
-        self.engine.on_progress = self._on_progress
-        self.engine.send_prompt_fn = self.bridge.send_prompt
-        self.engine.on_loop_wait = self._on_loop_wait
-        self.engine.on_step_retry = self._on_step_retry
-        self.engine.on_step_failure_recovery = self._on_step_failure_recovery
-
+                                                
+                        
         # Bridge status callback for live AI status
         self.bridge.on_status_change = self._on_bridge_status
         
@@ -1484,12 +1478,42 @@ class AutoPromptGUI:
     # ═══════════════════════════════════════════════════
     # EXECUTION
     # ═══════════════════════════════════════════════════
+
+    def _get_engine(self, wf_name=None):
+        if wf_name is None:
+            if not self._active_workflow: return self.engine
+            wf_name = self._active_workflow.name
+        if wf_name not in self.engines:
+            e = __import__("workflow_engine").WorkflowEngine()
+            e.on_step_start = lambda i, s, w=wf_name: self._on_step_start(i, s, w)
+            e.on_step_complete = lambda i, s, r, w=wf_name: self._on_step_complete(i, s, r, w)
+            e.on_error = lambda i, s, err, w=wf_name: self._on_step_error(i, s, err, w)
+            e.on_progress = lambda i, tot, pct, w=wf_name: self._on_progress(i, tot, pct, w)
+            e.on_workflow_done = lambda wf, status, w=wf_name: self._on_workflow_done(wf, status, w)
+            e.on_loop_wait = lambda remaining, w=wf_name: self._on_loop_wait(remaining, w)
+            e.on_step_retry = lambda i, s, rc, rl, res, w=wf_name: self._on_step_retry(i, s, rc, rl, res, w)
+            e.on_step_failure_recovery = lambda i, s, res, w=wf_name: self._on_step_failure_recovery(i, s, res, w)
+            
+            b = self._get_bridge(wf_name)
+            e.send_prompt_fn = b.send_prompt
+            self.engines[wf_name] = e
+        return self.engines[wf_name]
+
+    def _get_bridge(self, wf_name=None):
+        if wf_name is None:
+            if not self._active_workflow: return self.bridge
+            wf_name = self._active_workflow.name
+        if wf_name not in self.bridges:
+            b = __import__("editor_bridge").EditorBridge(self._editor_var.get())
+            self.bridges[wf_name] = b
+        return self.bridges[wf_name]
+
     def _run_workflow(self):
         if not self._active_workflow:
             messagebox.showinfo("Info", "No workflow selected.")
             return
 
-        if self.engine.is_running:
+        if self._get_engine().is_running:
             messagebox.showinfo("Info", "A workflow is already running.")
             return
 
@@ -1503,36 +1527,36 @@ class AutoPromptGUI:
 
         # Update bridge settings
         editor_key = self._get_selected_editor_key()
-        self.bridge.editor = editor_key
-        self.bridge.mode = self._mode_var.get()
+        self._get_bridge().editor = editor_key
+        self._get_bridge().mode = self._mode_var.get()
 
         if editor_key == "google_ai_studio":
             # Google AI Studio is cloud/browser-based; NO local project folder needed or checked!
-            self.bridge.project_path = Path.cwd()
-            self.bridge.use_autopilot_context = False  # NEVER scan disk for web studio!
+            self._get_bridge().project_path = Path.cwd()
+            self._get_bridge().use_autopilot_context = False  # NEVER scan disk for web studio!
             self._active_workflow.variables.setdefault("project_path", "this workspace")
         else:
             proj_str = self._project_var.get().strip()
             try:
-                self.bridge.project_path = Path(proj_str) if proj_str else Path.cwd()
+                self._get_bridge().project_path = Path(proj_str) if proj_str else Path.cwd()
             except Exception:
-                self.bridge.project_path = Path.cwd()
+                self._get_bridge().project_path = Path.cwd()
             if proj_str:
                 self._active_workflow.variables.setdefault("project_path", proj_str)
 
         self._log(f"▶ Starting workflow: {self._active_workflow.name}", "info")
-        self._log(f"  Editor: {self.bridge.editor_display_name}  |  Mode: {self.bridge.mode}", "dim")
+        self._log(f"  Editor: {self._get_bridge().editor_display_name}  |  Mode: {self._get_bridge().mode}", "dim")
 
         # Wire up the correct send function based on mode
-        if self.bridge.mode == "auto_interact":
-            if self.bridge.editor == "clipboard":
+        if self._get_bridge().mode == "auto_interact":
+            if self._get_bridge().editor == "clipboard":
                 # Special Case: Clipboard target + Auto-Interaction = Internal AI
                 if not self.chatbot.is_ready:
                     messagebox.showerror("Error", "No-Cost AI Chatbot not ready.")
                     return
                 
-                self.engine.send_and_wait_fn = self.chatbot.send_message_blocking
-                self.engine.send_prompt_fn = None
+                self._get_engine().send_and_wait_fn = self.chatbot.send_message_blocking
+                self._get_engine().send_prompt_fn = None
                 self._log("  🤖 Smart Routing: sending prompt directly to Internal AI (Pollinations)", "info")
                 if not self._chat_panel_visible:
                     self._toggle_chat_panel()
@@ -1548,12 +1572,12 @@ class AutoPromptGUI:
                     except Exception as e:
                         logger.debug(f"Playwright CDP check: {e}")
 
-                self.engine.send_and_wait_fn = self._send_external_with_logging
-                self.engine.send_prompt_fn = None
-                self._log(f"  🤖 Smart Routing: will type into {self.bridge.editor_display_name} + wait for completion", "info")
+                self._get_engine().send_and_wait_fn = self._send_external_with_logging
+                self._get_engine().send_prompt_fn = None
+                self._log(f"  🤖 Smart Routing: will type into {self._get_bridge().editor_display_name} + wait for completion", "info")
         else:
-            self.engine.send_and_wait_fn = None
-            self.engine.send_prompt_fn = self.bridge.send_prompt
+            self._get_engine().send_and_wait_fn = None
+            
 
         # Update button states
         self._run_btn.config(state="disabled")
@@ -1567,7 +1591,7 @@ class AutoPromptGUI:
             except ValueError:
                 pass
 
-        if self.bridge.mode == "auto_interact" and global_delay is not None and global_delay > 10.0:
+        if self._get_bridge().mode == "auto_interact" and global_delay is not None and global_delay > 10.0:
             self._log(f"⚡ Smart Auto-Interact: AI completion is dynamically detected via OCR/UIA. Bypassing {global_delay}s blind delay to start next step without delay.", "info")
             global_delay = 0.0
             self._global_delay_var.set("0")
@@ -1577,42 +1601,42 @@ class AutoPromptGUI:
             step.status = "pending"
         
         # Set global delay override in engine instead of mutating steps
-        self.engine.global_delay_override = global_delay
+        self._get_engine().global_delay_override = global_delay
         
         self._render_steps()
 
         # Update loop and stop settings
-        self.engine.loop_mode = self._loop_var.get()
-        self.engine._steps_since_last_stop = 0
+        self._get_engine().loop_mode = self._loop_var.get()
+        self._get_engine()._steps_since_last_stop = 0
         try:
             mins = float(self._loop_interval_var.get())
-            self.engine.loop_interval = max(0.1, mins * 60.0)
+            self._get_engine().loop_interval = max(0.1, mins * 60.0)
         except ValueError:
-            self.engine.loop_interval = 120.0
+            self._get_engine().loop_interval = 120.0
 
         try:
             stop_val = int(self._stop_every_x_var.get().strip())
-            self.engine.stop_every_x = max(0, stop_val)
+            self._get_engine().stop_every_x = max(0, stop_val)
         except ValueError:
-            self.engine.stop_every_x = 0
+            self._get_engine().stop_every_x = 0
 
         # Start!
-        self.engine.start(self._active_workflow)
+        self._get_engine().start(self._active_workflow)
 
     def _pause_resume(self):
-        if self.engine.is_paused:
-            self.engine.resume()
+        if self._get_engine().is_paused:
+            self._get_engine().resume()
             self._pause_btn.config(text="⏸ Pause")
             self._status_var.set("Running...")
             self._log("▶ Resumed", "info")
         else:
-            self.engine.pause()
+            self._get_engine().pause()
             self._pause_btn.config(text="▶ Resume")
             self._status_var.set("Paused")
             self._log("⏸ Paused", "warning")
 
     def _stop_workflow(self):
-        self.engine.cancel()
+        self._get_engine().cancel()
         self.bridge.cancel_wait()  # also cancel any active wait-for-completion
         self._loop_var.set(False)  # stop loop on manual stop
         self._log("⏹ Cancelling...", "warning")
@@ -1641,7 +1665,8 @@ class AutoPromptGUI:
         self.chatbot.add_history("assistant", f"[Prompt executed in {self.bridge.editor_display_name}]")
         return result
 
-    def _on_workflow_done(self, workflow, status):
+    def _on_workflow_done(self, workflow, status, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         """Called when a workflow run completes"""
         self.root.after(0, self._render_steps)
         self.root.after(0, self._update_ui_state)
@@ -1665,7 +1690,8 @@ class AutoPromptGUI:
         # Ask AI for next step
         self._ai_generate_workflow("Suggest the next logical development step based on my project context. RETURN STEPS ONLY.")
 
-    def _on_step_start(self, index: int, step: WorkflowStep):
+    def _on_step_start(self, index, step, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         self.root.after(0, self._ui_step_start, index, step.name)
 
     def _ui_step_start(self, index: int, name: str):
@@ -1879,7 +1905,8 @@ class AutoPromptGUI:
             (project_path.startswith("http://") or project_path.startswith("https://"))):
             self._log(f"Detected Project URL for AI Studio: {project_path}", "success")
 
-    def _on_step_complete(self, index: int, step: WorkflowStep, result: str):
+    def _on_step_complete(self, index, step, result, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         self.root.after(0, self._ui_step_complete, index, step.name, result)
 
     def _ui_step_complete(self, index: int, name: str, result: str):
@@ -1890,14 +1917,16 @@ class AutoPromptGUI:
             self._log(f"   → {preview}", "dim")
         self._render_steps()
 
-    def _on_step_error(self, index: int, step: WorkflowStep, error: str):
+    def _on_step_error(self, index, step, error, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         self.root.after(0, self._ui_step_error, index, step.name, error)
 
     def _ui_step_error(self, index: int, name: str, error: str):
         self._log(f"❌ Step {index + 1} failed: {name} — {error}", "error")
         self._render_steps()
 
-    def _on_step_retry(self, index: int, step: WorkflowStep, attempt: int, max_retries: int, error: str):
+    def _on_step_retry(self, index, step, attempt, max_retries, error, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         self.root.after(0, self._ui_step_retry, index, step.name, attempt, max_retries, error)
 
     def _ui_step_retry(self, index: int, name: str, attempt: int, max_retries: int, error: str):
@@ -1909,7 +1938,8 @@ class AutoPromptGUI:
             self._overlay.update_status(f"Step {index + 1} Retry {attempt}/{max_retries}: {name}")
         self._render_steps()
 
-    def _on_step_failure_recovery(self, index: int, step: WorkflowStep, error: str):
+    def _on_step_failure_recovery(self, index, step, error, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         """Recovery hook called before retrying a failed step"""
         if self._get_selected_editor_key() == "google_ai_studio":
             err_lower = error.lower()
@@ -1939,7 +1969,8 @@ class AutoPromptGUI:
             self._overlay.destroy()
             self._overlay = None
 
-    def _on_progress(self, current: int, total: int, percent: float):
+    def _on_progress(self, current, total, percent, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         self.root.after(0, self._progress_var.set, percent)
 
     def _on_bridge_status(self, status: str, detail: str):
@@ -1959,7 +1990,8 @@ class AutoPromptGUI:
         self._ai_status_var.set(detail)
         self._status_var.set(detail)
 
-    def _on_loop_wait(self, countdown: float):
+    def _on_loop_wait(self, countdown, wf_name=None):
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         self.root.after(0, self._ui_loop_wait, countdown)
 
     def _ui_loop_wait(self, countdown: float):
