@@ -1572,7 +1572,7 @@ class AutoPromptGUI:
                     except Exception as e:
                         logger.debug(f"Playwright CDP check: {e}")
 
-                self._get_engine().send_and_wait_fn = self._send_external_with_logging
+                self._get_engine().send_and_wait_fn = lambda p, c="", wf=self._active_workflow.name: self._send_external_with_logging(p, c, wf_name=wf)
                 self._get_engine().send_prompt_fn = None
                 self._log(f"  🤖 Smart Routing: will type into {self._get_bridge().editor_display_name} + wait for completion", "info")
         else:
@@ -1637,7 +1637,7 @@ class AutoPromptGUI:
 
     def _stop_workflow(self):
         self._get_engine().cancel()
-        self.bridge.cancel_wait()  # also cancel any active wait-for-completion
+        self._get_bridge().cancel_wait()  # also cancel any active wait-for-completion
         self._loop_var.set(False)  # stop loop on manual stop
         self._log("⏹ Cancelling...", "warning")
         
@@ -1648,7 +1648,7 @@ class AutoPromptGUI:
     # ═══════════════════════════════════════════════════
     # ENGINE CALLBACKS (called from background thread)
     # ═══════════════════════════════════════════════════
-    def _send_external_with_logging(self, prompt: str, context: str = "") -> str:
+    def _send_external_with_logging(self, prompt: str, context: str = "", wf_name: str = None) -> str:
         """Helper to send prompt to external editor AND log it in internal chatbot history"""
         # Log to chatbot so the UI panel stays in sync as a 'summary' of conversation
         display_prompt = prompt
@@ -1656,13 +1656,13 @@ class AutoPromptGUI:
             display_prompt = f"[Context: {context}]\n\n{prompt}"
         
         self.chatbot.add_history("user", prompt) # Keep it simple in history
-        self._append_chat(f"↗ Sending to {self.bridge.editor_display_name}: {prompt}\n", "system")
+        self._append_chat(f"↗ Sending to {self._get_bridge(wf_name).editor_display_name}: {prompt}\n", "system")
         
         # Do the actual interaction
-        result = self.bridge.send_and_wait(prompt)
+        result = self._get_bridge(wf_name).send_and_wait(prompt)
         
         # Log the completion too
-        self.chatbot.add_history("assistant", f"[Prompt executed in {self.bridge.editor_display_name}]")
+        self.chatbot.add_history("assistant", f"[Prompt executed in {self._get_bridge(wf_name).editor_display_name}]")
         return result
 
     def _on_workflow_done(self, workflow, status, wf_name=None):
@@ -1704,7 +1704,7 @@ class AutoPromptGUI:
     def _on_editor_change(self, event=None):
         editor_key = self._get_selected_editor_key()
         self.bridge.editor = editor_key
-        display_name = self.bridge.editor_display_name
+        display_name = self._get_bridge(wf_name).editor_display_name
         
         # Update Status Bar
         icon = EditorBridge.EDITORS.get(editor_key, {}).get("icon", "⚡")

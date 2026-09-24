@@ -339,7 +339,7 @@ class PlaywrightBrowserManager:
 
             if not submitted:
                 # Fallback: Press Enter inside the textarea
-                input_locator.press("Enter")
+                input_locator.press("Control+Enter")
 
             return f"✅ Prompt injected directly via Playwright DOM ({len(prompt)} chars)"
 
@@ -395,7 +395,7 @@ class PlaywrightBrowserManager:
                         break
 
                 # 3. Send button check
-                send_loc = page.locator('button[aria-label="Send"], button.send-button').first
+                send_loc = page.locator('button[aria-label="Send"], button.send-button, button:has-text("arrow_upward"), button:has-text("send")').first
                 if send_loc.is_visible(timeout=200):
                     res["has_send_btn"] = True
 
