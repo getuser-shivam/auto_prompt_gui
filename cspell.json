@@ -1,0 +1,25 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "CODEX",
+    "CODEXAPP",
+    "LOCALAPPDATA",
+    "WINFUNCTYPE",
+    "KEYEVENTF",
+    "KEYUP",
+    "keybd",
+    "tasklist",
+    "pname",
+    "cooldown",
+    "interruptible",
+    "venv",
+    "pycache",
+    "pids"
+  ],
+  "ignorePaths": [
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/build/**"
+  ]
+}

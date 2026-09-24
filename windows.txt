@@ -1,0 +1,7 @@
+﻿
+MainWindowTitle                        ProcessName      Id
+---------------                        -----------      --
+automation - Antigravity - Walkthrough Antigravity   26920
+Windows Input Experience               TextInputHost 14412
+
+

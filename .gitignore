@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+automation.log
+@AutomationLog.txt
+gui_settings.json
+workflows/
+scratch/
+test_*.py
+debug_*.png
+no_cost_repo/
