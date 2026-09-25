@@ -1549,7 +1549,9 @@ class EditorBridge:
                 if doc.Exists(0.5, 0.1):
                     for name in ["Republish", "Publish"]:
                         btn = doc.ButtonControl(searchDepth=14, Name=name)
-                        if btn.Exists(0.5, 0.1):
+                        if not btn.Exists(0.2, 0.1):
+                            btn = doc.HyperlinkControl(searchDepth=14, Name=name)
+                        if btn.Exists(0.3, 0.1):
                             btn.Click(waitTime=0.2)
                             republish_clicked = True
                             logger.info(f"UIA clicked sidebar {name} button")
@@ -1559,7 +1561,7 @@ class EditorBridge:
 
         if not republish_clicked:
             republish_clicked = bool(self.find_and_click_ocr_target(
-                ["republish", "publish"], region_filter=(0.65, 0.98, 0.15, 0.40), hwnd=hwnd
+                ["republish", "publish"], region_filter=(0.65, 0.98, 0.15, 0.70), hwnd=hwnd
             ))
 
         self._emit_status("waiting", "🚀 Build deploying... Waiting for 'Ready' status...")
@@ -1590,7 +1592,7 @@ class EditorBridge:
 
             if not visit_clicked:
                 visit_clicked = bool(self.find_and_click_ocr_target(
-                    ["visit"], region_filter=(0.60, 0.90, 0.15, 0.40), hwnd=hwnd
+                    ["visit"], region_filter=(0.60, 0.90, 0.15, 0.70), hwnd=hwnd
                 ))
                 if visit_clicked:
                     break
