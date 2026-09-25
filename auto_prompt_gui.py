@@ -1704,7 +1704,7 @@ class AutoPromptGUI:
     def _on_editor_change(self, event=None):
         editor_key = self._get_selected_editor_key()
         self.bridge.editor = editor_key
-        display_name = self._get_bridge(wf_name).editor_display_name
+        display_name = self.bridge.editor_display_name
         
         # Update Status Bar
         icon = EditorBridge.EDITORS.get(editor_key, {}).get("icon", "⚡")
