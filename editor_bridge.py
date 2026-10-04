@@ -864,7 +864,7 @@ class EditorBridge:
             return self._send_via_web_uia(prompt, hwnd)
 
         # Bring window to front
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
         time.sleep(0.2)
         user32.SetForegroundWindow(hwnd)
         time.sleep(0.5)
@@ -1032,7 +1032,7 @@ class EditorBridge:
 
         try:
             # 1. Bring window to front
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
             time.sleep(0.2)
             user32.SetForegroundWindow(hwnd)
             time.sleep(0.3)
@@ -1371,7 +1371,7 @@ class EditorBridge:
             return False
 
         # 1. Bring window to front
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
         time.sleep(0.2)
         user32.SetForegroundWindow(hwnd)
         time.sleep(0.4)
@@ -1619,7 +1619,7 @@ class EditorBridge:
             return False
 
         # 1. Bring window to front
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
         time.sleep(0.2)
         user32.SetForegroundWindow(hwnd)
         time.sleep(0.5)
@@ -1748,7 +1748,7 @@ class EditorBridge:
         user32 = ctypes.windll.user32
 
         # 1. Bring window to front
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
         time.sleep(0.3)
         user32.SetForegroundWindow(hwnd)
         time.sleep(0.5)
@@ -2016,7 +2016,7 @@ class EditorBridge:
 
         if hwnd:
             try:
-                user32.ShowWindow(hwnd, 9)
+                user32.ShowWindow(hwnd, 3)
                 user32.SetForegroundWindow(hwnd)
                 time.sleep(0.3)
             except Exception:
