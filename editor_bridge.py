@@ -1887,20 +1887,19 @@ class EditorBridge:
             win_width = (win_rect[2] - win_rect[0]) if win_rect else 1200
             win_height = (win_rect[3] - win_rect[1]) if win_rect else 800
 
-            if prompt_input_ctrl and prompt_input_ctrl.BoundingRectangle and prompt_input_ctrl.BoundingRectangle.width > 0:
-                in_rect = prompt_input_ctrl.BoundingRectangle
-                logger.info(f"UIA found prompt input in Chat Screen: '{prompt_input_ctrl.Name}' at {in_rect}")
-                click_x = in_rect.left + int(in_rect.width * 0.3)
-                click_y = in_rect.top + int(in_rect.height * 0.5)
+            if prompt_input_ctrl:
+                logger.info(f"UIA found prompt input in Chat Screen: '{prompt_input_ctrl.Name}'. Using UIA Click.")
+                prompt_input_ctrl.SetFocus()
+                time.sleep(0.1)
+                prompt_input_ctrl.Click(simulateMove=False)
+                time.sleep(0.4)
             else:
                 # Scoped fallback: inside chat pane, 80px from bottom of window/doc
                 click_x = chat_left + int((chat_right - chat_left) * 0.45)
                 click_y = (doc_rect.bottom - 75) if doc_rect else (win_top + win_height - 85)
                 logger.info(f"Targeting calculated prompt textarea at ({click_x}, {click_y})")
-
-            # Click into the input box to ensure focus
-            pyautogui.click(click_x, click_y)
-            time.sleep(0.4)
+                pyautogui.click(click_x, click_y)
+                time.sleep(0.4)
 
             # --- DIALOG BUSTER: Detect if we accidentally opened the upload dialog ---
             try:
@@ -1909,9 +1908,11 @@ class EditorBridge:
                     logger.warning("Accidentally opened file upload dialog. Closing it and shifting click right.")
                     self._press_key("escape")
                     time.sleep(0.4)
-                    # Shift click right by 180px to safely clear the + icon
-                    click_x += 180
-                    pyautogui.click(click_x, click_y)
+                    if 'click_x' in locals():
+                        click_x += 180
+                        pyautogui.click(click_x, click_y)
+                    elif prompt_input_ctrl:
+                        prompt_input_ctrl.Click(simulateMove=False)
                     time.sleep(0.2)
             except Exception:
                 pass
@@ -1950,20 +1951,6 @@ class EditorBridge:
                 except Exception:
                     pass
 
-            # Calculate the exact physical coordinate of the Send button
-            # In Google AI Studio, the round button is at the bottom-right of the input box
-            if send_btn and send_btn.BoundingRectangle and send_btn.BoundingRectangle.width > 0:
-                s_rect = send_btn.BoundingRectangle
-                send_x = s_rect.left + s_rect.width // 2
-                send_y = s_rect.top + s_rect.height // 2
-            elif prompt_input_ctrl and prompt_input_ctrl.BoundingRectangle and prompt_input_ctrl.BoundingRectangle.width > 0:
-                send_x = prompt_input_ctrl.BoundingRectangle.right - 24
-                send_y = prompt_input_ctrl.BoundingRectangle.bottom - 24
-            else:
-                # Geometrically positioned at bottom-right of chat pane
-                send_x = chat_right - 32
-                send_y = (doc_rect.bottom - 58) if doc_rect else (win_top + win_height - 68)
-
             # Action 1: Dispatch Enter key
             logger.info("Submitting via Enter key...")
             self._press_key("enter")
@@ -1974,9 +1961,18 @@ class EditorBridge:
             self._press_hotkey("ctrl+enter")
             time.sleep(0.3)
 
-            # Action 3: Click the Send button icon
-            logger.info(f"Clicking Send button icon at ({send_x}, {send_y})...")
-            pyautogui.click(send_x, send_y)
+            # Action 3: Click the Send button directly via UIA
+            if send_btn:
+                logger.info(f"UIA found Send button: '{send_btn.Name}'. Clicking it directly.")
+                try:
+                    send_btn.Click(simulateMove=False)
+                except Exception:
+                    # Fallback to coordinate if UIA click fails
+                    if send_btn.BoundingRectangle:
+                        s_rect = send_btn.BoundingRectangle
+                        pyautogui.click(s_rect.left + s_rect.width // 2, s_rect.top + s_rect.height // 2)
+            else:
+                logger.info("Send button not found via UIA. Relying on Ctrl+Enter.")
             time.sleep(0.4)
 
             # Action 4: Tab + Enter (Fallback)
