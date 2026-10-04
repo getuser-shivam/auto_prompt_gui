@@ -204,6 +204,15 @@ class EditorBridge:
         self._post_completion_delay = 2.0  # cooldown after AI finishes
         self._cancel_wait = threading.Event()  # to cancel waiting early
         self._last_allow_time = 0.0  # limit frequency of check_and_allow
+        self._last_ocr_time = 0.0    # throttle PowerShell OCR to prevent lag and slow detection
+
+    def _should_run_ocr(self, min_interval: float = 5.0) -> bool:
+        """Throttle heavy PowerShell OCR subprocess calls to prevent system freeze."""
+        now = time.time()
+        if now - getattr(self, "_last_ocr_time", 0.0) >= min_interval:
+            self._last_ocr_time = now
+            return True
+        return False
 
         # Status callback for GUI live updates
         self.on_status_change: Optional[Callable[[str, str], None]] = None  # (status, detail)
@@ -1128,9 +1137,9 @@ class EditorBridge:
                 doc_rect = doc.BoundingRectangle
                 chat_right = doc_rect.left + int(doc_rect.width * 0.45) if doc_rect else 999999
 
-                # Scan text elements in Document (focusing on left chat screen pane)
+                # Fast shallow scan of text elements in Document (focusing on left chat screen pane)
                 def scan_errors(ctrl, depth=0):
-                    if depth > 10:
+                    if depth > 4:
                         return
                     try:
                         name = (ctrl.Name or "").strip()
@@ -1154,8 +1163,8 @@ class EditorBridge:
         except Exception as e:
             logger.debug(f"UIA error scan error: {e}")
 
-        # OCR fallback if no errors found via UIA (handles custom web components)
-        if not detected:
+        # Throttled OCR fallback (runs at most once every 5 seconds, not on every tick)
+        if not detected and self._should_run_ocr(5.0):
             try:
                 ocr_errors = self._scan_errors_via_ocr(hwnd)
                 if ocr_errors:
@@ -1823,186 +1832,70 @@ class EditorBridge:
                 logger.error("UIA cannot find browser window")
                 return self._web_uia_fallback(prompt, hwnd)
 
-            # 4. Find the DocumentControl (web page content)
-            doc = window.DocumentControl(searchDepth=8)
-            if not doc.Exists(6, 0.5):
-                logger.warning("UIA couldn't find DocumentControl. Using scoped fallback.")
-                return self._web_uia_fallback(prompt, hwnd)
-
-            doc_rect = doc.BoundingRectangle
-            if not doc_rect:
-                return self._web_uia_fallback(prompt, hwnd)
-
-            # 5. Define Chat Screen Boundary (Left pane, ~42% of document width)
-            # This strictly isolates the chat pane from the right-side web preview!
-            chat_left = doc_rect.left
-            chat_right = doc_rect.left + int(doc_rect.width * 0.42)
-            chat_bottom = doc_rect.bottom
-            logger.info(f"Chat Screen Bounds: Left={chat_left}, Right={chat_right}, Bottom={chat_bottom}")
-
-            # ── STEP 1: Press Escape to dismiss any open dialogs/menus ──
-            self._press_key("escape")
-            time.sleep(0.3)
-
-            # ── STEP 2: Try UIA SetFocus on known input controls ──
-            prompt_input_ctrl = None
-
-            def find_chat_input(ctrl, depth=0):
-                nonlocal prompt_input_ctrl
-                if prompt_input_ctrl or depth > 12:
-                    return
-                try:
-                    c_type = ctrl.ControlTypeName
-                    if c_type in ("EditControl", "Edit", "GroupControl", "PaneControl", "DocumentControl"):
-                        rect = ctrl.BoundingRectangle
-                        if rect and rect.width > 200:
-                            # MUST BE STRICTLY WITHIN CHAT SCREEN
-                            if (rect.left >= chat_left - 30 and rect.right <= chat_right + 60 and 
-                                rect.bottom >= doc_rect.bottom - 260):
-                                name_lower = (ctrl.Name or "").lower()
-                                help_lower = (ctrl.HelpText or "").lower()
-                                if any(k in name_lower or k in help_lower for k in ["make changes", "ask for anything", "prompt", "new features"]):
-                                    prompt_input_ctrl = ctrl
-                                    return
-                    for child in ctrl.GetChildren():
-                        find_chat_input(child, depth + 1)
-                except Exception:
-                    pass
-
-            find_chat_input(doc)
-
-            # If not matched by placeholder name, find the bottom-most EditControl in the chat pane
-            if not prompt_input_ctrl:
-                bottom_edits = []
-                def collect_chat_edits(ctrl, depth=0):
-                    if depth > 12: return
-                    try:
-                        if ctrl.ControlTypeName in ("EditControl", "Edit", "GroupControl", "PaneControl", "DocumentControl"):
-                            rect = ctrl.BoundingRectangle
-                            if rect and rect.width > 200:
-                                if (rect.left >= chat_left - 30 and rect.right <= chat_right + 60 and
-                                    rect.bottom >= doc_rect.bottom - 260):
-                                    bottom_edits.append(ctrl)
-                        for child in ctrl.GetChildren():
-                            collect_chat_edits(child, depth + 1)
-                    except Exception:
-                        pass
-                collect_chat_edits(doc)
-                if bottom_edits:
-                    prompt_input_ctrl = max(bottom_edits, key=lambda c: c.BoundingRectangle.bottom if c.BoundingRectangle else 0)
-
-            # ── STEP 3: Focus the input — prefer UIA SetFocus, fallback keyboard only ──
+            # 4. Define Chat Screen Boundary (Left pane, ~42% of document width)
             win_rect = self._get_window_rect(hwnd)
             win_left = win_rect[0] if win_rect else 0
             win_top = win_rect[1] if win_rect else 0
-            win_width = (win_rect[2] - win_rect[0]) if win_rect else 1200
-            win_height = (win_rect[3] - win_rect[1]) if win_rect else 800
+            win_width = (win_rect[2] - win_rect[0]) if win_rect else 1920
+            win_height = (win_rect[3] - win_rect[1]) if win_rect else 1080
 
-            if prompt_input_ctrl:
-                logger.info(f"UIA found prompt input: '{prompt_input_ctrl.Name}'. Using UIA SetFocus.")
-                try:
-                    prompt_input_ctrl.SetFocus()
-                    time.sleep(0.2)
-                except Exception:
-                    pass
-            else:
-                # Keyboard-only fallback: press Escape first to dismiss any open menus,
-                # then click precisely inside the text area using the KNOWN safe region
-                # (right half of the chat pane, bottom 120px)
-                logger.info("Prompt input not found via UIA. Using keyboard Escape + click fallback.")
-                self._press_key("escape")
-                time.sleep(0.3)
-                safe_x = chat_left + int((chat_right - chat_left) * 0.60)
-                safe_y = (doc_rect.bottom - 60) if doc_rect else (win_top + win_height - 80)
-                pyautogui.click(safe_x, safe_y)
-            time.sleep(0.3)
+            doc = window.DocumentControl(searchDepth=3)
+            doc_rect = doc.BoundingRectangle if (doc and doc.Exists(0.5, 0.1)) else None
+            chat_left = doc_rect.left if doc_rect else win_left
+            chat_width = int((doc_rect.width if doc_rect else win_width) * 0.42)
+            chat_bottom = doc_rect.bottom if doc_rect else (win_top + win_height)
+            logger.info(f"Chat Screen Bounds: Left={chat_left}, Width={chat_width}, Bottom={chat_bottom}")
 
+            # ── STEP 1: Dismiss any open dialogs/menus (Escape) ──
+            self._press_key("escape")
+            time.sleep(0.15)
 
-            # --- DIALOG BUSTER: Detect if we accidentally opened the upload dialog ---
-            try:
-                dialog_title = doc.TextControl(searchDepth=14, Name="Select or upload a file") if doc else None
-                if dialog_title and dialog_title.Exists(0.2, 0.05):
-                    logger.warning("Accidentally opened file upload dialog. Closing it and shifting click right.")
-                    self._press_key("escape")
-                    time.sleep(0.4)
-                    if 'click_x' in locals():
-                        click_x += 180
-                        pyautogui.click(click_x, click_y)
-                    elif prompt_input_ctrl:
-                        prompt_input_ctrl.Click(simulateMove=False)
-                    time.sleep(0.2)
-            except Exception:
-                pass
+            # ── STEP 2: Directly focus the prompt textarea ──
+            # The prompt textarea in Google AI Studio is ALWAYS centered in the bottom of the left chat column.
+            # 48% width is safely between the + icon (left) and the microphone/send buttons (right).
+            click_x = chat_left + int(chat_width * 0.48)
+            click_y = chat_bottom - 75
+            logger.info(f"Directly focusing prompt textarea at ({click_x}, {click_y})")
+            pyautogui.click(click_x, click_y)
+            time.sleep(0.15)
 
             # Clear any existing text
             self._press_hotkey("ctrl+a")
-            time.sleep(0.08)
+            time.sleep(0.04)
             self._press_key("backspace")
-            time.sleep(0.08)
+            time.sleep(0.04)
 
             # Paste the prompt
             self._clipboard_set(prompt)
-            time.sleep(0.15)
+            time.sleep(0.1)
             self._press_hotkey("ctrl+v")
-            time.sleep(0.3)
-
-            # Trigger Angular/Lit/React input change events so Send button activates (.can-submit)
-            self._press_key("space")
-            time.sleep(0.05)
-            self._press_key("backspace")
             time.sleep(0.2)
+
+            # Trigger input change events so submit button activates
+            self._press_key("space")
+            time.sleep(0.03)
+            self._press_key("backspace")
+            time.sleep(0.15)
 
             self._emit_status("typing", "Prompt entered. Submitting to Google AI Studio...")
 
-            # 8. SUBMIT THE PROMPT (ENTER + CTRL+ENTER + SEND BUTTON CLICK)
-            # Find the Send button (.send-button / aria-label="Send" / arrow_upward_alt)
-            send_btn = None
-            for s_name in ["Send", "Send prompt", "Submit", "Run", "Submit prompt", "arrow_upward_alt", "↑"]:
-                try:
-                    btn = doc.ButtonControl(searchDepth=14, Name=s_name) if doc else window.ButtonControl(searchDepth=14, Name=s_name)
-                    if btn.Exists(0.3, 0.1):
-                        b_rect = btn.BoundingRectangle
-                        if b_rect and b_rect.width > 0 and b_rect.left <= chat_right + 80 and b_rect.bottom >= (doc_rect.bottom - 140 if doc_rect else win_top + win_height - 150):
-                            send_btn = btn
-                            break
-                except Exception:
-                    pass
-
-            # Action 1: Dispatch Enter key
-            logger.info("Submitting via Enter key...")
-            self._press_key("enter")
-            time.sleep(0.3)
-
-            # Action 2: Dispatch Ctrl+Enter (standard AI submit shortcut)
+            # ── STEP 3: SUBMIT THE PROMPT ──
+            # Action 1: Ctrl+Enter (the primary, universal AI submit hotkey in AI Studio)
             logger.info("Submitting via Ctrl+Enter...")
             self._press_hotkey("ctrl+enter")
-            time.sleep(0.3)
+            time.sleep(0.25)
 
-            # Action 3: Click the Send button directly via UIA
-            if send_btn:
-                logger.info(f"UIA found Send button: '{send_btn.Name}'. Clicking it directly.")
-                try:
-                    send_btn.Click(simulateMove=False)
-                except Exception:
-                    # Fallback to coordinate if UIA click fails
-                    if send_btn.BoundingRectangle:
-                        s_rect = send_btn.BoundingRectangle
-                        pyautogui.click(s_rect.left + s_rect.width // 2, s_rect.top + s_rect.height // 2)
-            else:
-                logger.info("Send button not found via UIA. Relying on Ctrl+Enter.")
-            time.sleep(0.4)
+            # Action 2: Click the Send (up arrow) button at bottom-right of chat pane
+            send_x = chat_left + chat_width - 35
+            send_y = chat_bottom - 70
+            logger.info(f"Clicking Send button icon at ({send_x}, {send_y})...")
+            pyautogui.click(send_x, send_y)
+            time.sleep(0.25)
 
-            # Action 4: Tab + Enter (Fallback)
-            logger.info("Submitting via Tab + Enter...")
-            self._press_key("tab")
-            time.sleep(0.1)
+            # Action 3: Enter key
             self._press_key("enter")
-            time.sleep(0.1)
-            self._press_key("space")
-            time.sleep(0.3)
+            time.sleep(0.2)
 
-            # Verify: if input still contains full text, repeat click and enter
-            time.sleep(0.5)
             return f"✅ Prompt injected and submitted into Google AI Studio ({len(prompt)} chars)"
 
         except ImportError:
@@ -2014,7 +1907,7 @@ class EditorBridge:
 
 
     def _web_uia_fallback(self, prompt: str, hwnd=None) -> str:
-        """Robust fallback: focuses chat textarea, pastes, dispatches Enter, Ctrl+Enter, and clicks Send button."""
+        """Robust direct fallback: focuses chat textarea, pastes, and dispatches Ctrl+Enter + click Send."""
         import pyautogui
         pyautogui.FAILSAFE = False
         import ctypes
@@ -2026,79 +1919,62 @@ class EditorBridge:
             w_width = w_right - w_left
             w_height = w_bottom - w_top
         else:
-            w_left, w_top, w_width, w_height = 0, 0, 1200, 800
+            w_left, w_top, w_width, w_height = 0, 0, 1920, 1080
 
         if hwnd:
             try:
                 user32.ShowWindow(hwnd, 3)
                 user32.SetForegroundWindow(hwnd)
-                time.sleep(0.3)
+                time.sleep(0.2)
             except Exception:
                 pass
 
-        # 1. Click into Chat input area (~35% from left, ~85px from bottom)
-        input_x = w_left + int(w_width * 0.35)
-        input_y = w_top + w_height - 85
+        chat_width = int(w_width * 0.42)
+
+        # 1. Dismiss any popups
+        self._press_key("escape")
+        time.sleep(0.15)
+
+        # 2. Click into Chat input area (center of chat pane, 75px from bottom)
+        input_x = w_left + int(chat_width * 0.48)
+        input_y = w_top + w_height - 75
         logger.info(f"Fallback: Clicking chat input area at ({input_x}, {input_y})")
         pyautogui.click(input_x, input_y)
-        time.sleep(0.4)
-
-        try:
-            import uiautomation as auto
-            root = auto.GetRootControl()
-            dialog = root.TextControl(searchDepth=14, Name="Select or upload a file")
-            if dialog.Exists(0.2, 0.05):
-                logger.warning("Fallback accidentally opened file upload dialog. Closing it and shifting click right.")
-                self._press_key("escape")
-                time.sleep(0.4)
-                input_x += 180
-                pyautogui.click(input_x, input_y)
-                time.sleep(0.2)
-        except Exception:
-            pass
-        # 2. Clear existing text
-        self._press_hotkey("ctrl+a")
-        time.sleep(0.08)
-        self._press_key("backspace")
-        time.sleep(0.08)
-
-        # 3. Paste prompt
-        self._clipboard_set(prompt)
         time.sleep(0.15)
-        self._press_hotkey("ctrl+v")
-        time.sleep(0.3)
 
-        # 4. Trigger input change event
-        self._press_key("space")
-        time.sleep(0.05)
+        # 3. Clear existing text
+        self._press_hotkey("ctrl+a")
+        time.sleep(0.04)
         self._press_key("backspace")
+        time.sleep(0.04)
+
+        # 4. Paste prompt
+        self._clipboard_set(prompt)
+        time.sleep(0.1)
+        self._press_hotkey("ctrl+v")
         time.sleep(0.2)
 
-        # 5. SUBMIT VIA ENTER
-        logger.info("Fallback: Pressing Enter...")
-        self._press_key("enter")
-        time.sleep(0.3)
+        # 5. Trigger input change event
+        self._press_key("space")
+        time.sleep(0.03)
+        self._press_key("backspace")
+        time.sleep(0.15)
 
-        # 6. SUBMIT VIA CTRL+ENTER
+        # 6. Submit via Ctrl+Enter
         logger.info("Fallback: Pressing Ctrl+Enter...")
         self._press_hotkey("ctrl+enter")
-        time.sleep(0.3)
+        time.sleep(0.25)
 
-        # 7. CLICK SEND BUTTON ICON (.send-button at ~38% width, ~65px from bottom)
-        send_x = w_left + int(w_width * 0.38)
-        send_y = w_top + w_height - 65
+        # 7. Click Send button icon (at right edge of chat pane bottom)
+        send_x = w_left + chat_width - 35
+        send_y = w_top + w_height - 70
         logger.info(f"Fallback: Clicking Send button icon at ({send_x}, {send_y})")
         pyautogui.click(send_x, send_y)
-        time.sleep(0.4)
+        time.sleep(0.25)
 
-        # 8. TAB + ENTER (Fallback for when coordinates miss and Ctrl+Enter fails)
-        logger.info("Fallback: Pressing Tab then Enter (to target Send button)...")
-        self._press_key("tab")
-        time.sleep(0.1)
+        # 8. Enter key
         self._press_key("enter")
-        time.sleep(0.1)
-        self._press_key("space")
-        time.sleep(0.3)
+        time.sleep(0.2)
 
         return f"✅ Prompt injected and submitted into Google AI Studio ({len(prompt)} chars)"
 
@@ -2508,14 +2384,14 @@ class EditorBridge:
                 window = auto.WindowControl(searchDepth=1, handle=hwnd)
 
             if window and window.Exists(0.5, 0.1):
-                doc = window.DocumentControl(searchDepth=8)
+                doc = window.DocumentControl(searchDepth=4)
                 if doc and doc.Exists(0.5, 0.1):
                     doc_rect = doc.BoundingRectangle
                     chat_right = (doc_rect.left + int(doc_rect.width * 0.45)) if doc_rect else 999999
                     chat_bottom = doc_rect.bottom if doc_rect else 999999
 
                     def scan_node(ctrl, depth=0):
-                        if depth > 15:
+                        if depth > 4:
                             return
                         try:
                             rect = ctrl.BoundingRectangle
@@ -2561,9 +2437,9 @@ class EditorBridge:
         except Exception as e:
             logger.debug(f"UIA generation check error: {e}")
 
-        # --- 2. High-Accuracy OCR Fallback / Verification ---
-        # If UIA hasn't definitively detected generation or completion, verify via OCR
-        if not info["is_generating"] and not info["is_finished"]:
+        # --- 2. Throttled OCR Fallback / Verification ---
+        # If UIA hasn't definitively detected generation or completion, verify via OCR (throttled)
+        if not info["is_generating"] and not info["is_finished"] and self._should_run_ocr(4.0):
             try:
                 ocr_lines = self._get_chat_ocr_lines(hwnd)
                 for line in ocr_lines:
