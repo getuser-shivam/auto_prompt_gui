@@ -521,8 +521,34 @@ class PlaywrightBrowserManager:
             if not input_locator:
                 raise RuntimeError("Google AI Studio is open, but its chat input was not found. Open a chat screen and try again.")
 
+            # ── DISABLE the file-upload + button so it can NEVER intercept clicks ──
+            try:
+                page.evaluate("""
+                    // Hide all attachment / file-upload buttons in the chat toolbar
+                    const selectors = [
+                        'button[aria-label*="upload" i]',
+                        'button[aria-label*="attach" i]',
+                        'button[aria-label*="file" i]',
+                        'button[aria-label*="image" i]',
+                        'button.add-attachment-button',
+                        'ms-prompt-actions button:first-child',
+                        'mat-toolbar button:first-child',
+                        'button.input-button:first-child',
+                    ];
+                    selectors.forEach(sel => {
+                        document.querySelectorAll(sel).forEach(el => {
+                            el.style.pointerEvents = 'none';
+                            el.style.opacity = '0.3';
+                            el.setAttribute('tabindex', '-1');
+                            el.setAttribute('data-disabled-by-bot', '1');
+                        });
+                    });
+                """)
+            except Exception:
+                pass
+
             baseline_body = ""
-            # Direct DOM fill
+            # Click the chat box directly using Playwright's exact element reference — no coordinates
             input_locator.click()
             input_locator.fill(prompt)
             try:

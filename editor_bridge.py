@@ -1888,18 +1888,24 @@ class EditorBridge:
             win_height = (win_rect[3] - win_rect[1]) if win_rect else 800
 
             if prompt_input_ctrl:
-                logger.info(f"UIA found prompt input in Chat Screen: '{prompt_input_ctrl.Name}'. Using UIA Click.")
-                prompt_input_ctrl.SetFocus()
-                time.sleep(0.1)
-                prompt_input_ctrl.Click(simulateMove=False)
-                time.sleep(0.4)
+                logger.info(f"UIA found prompt input: '{prompt_input_ctrl.Name}'. Using UIA SetFocus.")
+                try:
+                    prompt_input_ctrl.SetFocus()
+                    time.sleep(0.2)
+                except Exception:
+                    pass
             else:
-                # Scoped fallback: inside chat pane, 80px from bottom of window/doc
-                click_x = chat_left + int((chat_right - chat_left) * 0.45)
-                click_y = (doc_rect.bottom - 75) if doc_rect else (win_top + win_height - 85)
-                logger.info(f"Targeting calculated prompt textarea at ({click_x}, {click_y})")
-                pyautogui.click(click_x, click_y)
-                time.sleep(0.4)
+                # Keyboard-only fallback: press Escape first to dismiss any open menus,
+                # then Ctrl+Shift+I won't work so we click precisely inside the text area
+                # using the KNOWN safe region (right half of the chat pane, bottom 120px)
+                logger.info("Prompt input not found via UIA. Using keyboard Escape + click fallback.")
+                self._press_key("escape")
+                time.sleep(0.3)
+                safe_x = chat_left + int((chat_right - chat_left) * 0.60)
+                safe_y = (doc_rect.bottom - 60) if doc_rect else (win_top + win_height - 80)
+                pyautogui.click(safe_x, safe_y)
+            time.sleep(0.3)
+
 
             # --- DIALOG BUSTER: Detect if we accidentally opened the upload dialog ---
             try:
