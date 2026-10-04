@@ -1900,7 +1900,21 @@ class EditorBridge:
 
             # Click into the input box to ensure focus
             pyautogui.click(click_x, click_y)
-            time.sleep(0.2)
+            time.sleep(0.4)
+
+            # --- DIALOG BUSTER: Detect if we accidentally opened the upload dialog ---
+            try:
+                dialog_title = doc.TextControl(searchDepth=14, Name="Select or upload a file") if doc else None
+                if dialog_title and dialog_title.Exists(0.2, 0.05):
+                    logger.warning("Accidentally opened file upload dialog. Closing it and shifting click right.")
+                    self._press_key("escape")
+                    time.sleep(0.4)
+                    # Shift click right by 180px to safely clear the + icon
+                    click_x += 180
+                    pyautogui.click(click_x, click_y)
+                    time.sleep(0.2)
+            except Exception:
+                pass
 
             # Clear any existing text
             self._press_hotkey("ctrl+a")
@@ -2013,8 +2027,21 @@ class EditorBridge:
         input_y = w_top + w_height - 85
         logger.info(f"Fallback: Clicking chat input area at ({input_x}, {input_y})")
         pyautogui.click(input_x, input_y)
-        time.sleep(0.2)
+        time.sleep(0.4)
 
+        try:
+            import uiautomation as auto
+            root = auto.GetRootControl()
+            dialog = root.TextControl(searchDepth=14, Name="Select or upload a file")
+            if dialog.Exists(0.2, 0.05):
+                logger.warning("Fallback accidentally opened file upload dialog. Closing it and shifting click right.")
+                self._press_key("escape")
+                time.sleep(0.4)
+                input_x += 180
+                pyautogui.click(input_x, input_y)
+                time.sleep(0.2)
+        except Exception:
+            pass
         # 2. Clear existing text
         self._press_hotkey("ctrl+a")
         time.sleep(0.08)
