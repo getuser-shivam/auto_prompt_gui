@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Auto-Prompt Workflow GUI
 Chains prompts sequentially and sends them to AI coding editors
@@ -29,9 +29,9 @@ try:
 except ImportError:
     get_playwright_manager = None
 
-# ─────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Color Palette
-# ─────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 COLORS = {
     "bg_dark": "#0d1117",
     "bg_mid": "#161b22",
@@ -64,11 +64,11 @@ STATUS_COLORS = {
 }
 
 STATUS_ICONS = {
-    "pending": "○",
-    "running": "⏳",
-    "completed": "✅",
-    "failed": "❌",
-    "skipped": "⏭️",
+    "pending": "â—‹",
+    "running": "â³",
+    "completed": "âœ…",
+    "failed": "âŒ",
+    "skipped": "â­ï¸",
 }
 
 
@@ -106,7 +106,7 @@ class StepOverlay(tk.Toplevel):
         
         # Small Stop Button
         self._stop_btn = tk.Button(
-            content, text="⏹ STOP", font=("Segoe UI", 8, "bold"),
+            content, text="â¹ STOP", font=("Segoe UI", 8, "bold"),
             bg=COLORS["red_dim"], fg="#ffffff",
             activebackground=COLORS["red"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=10, pady=4,
@@ -115,7 +115,7 @@ class StepOverlay(tk.Toplevel):
         self._stop_btn.pack(side=tk.RIGHT, padx=(10, 0))
         
         # Grip icon for dragging
-        tk.Label(content, text="⠿", font=("Segoe UI", 12), bg=COLORS["bg_card"], fg=COLORS["text_muted"]).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Label(content, text="â ¿", font=("Segoe UI", 12), bg=COLORS["bg_card"], fg=COLORS["text_muted"]).pack(side=tk.RIGHT, padx=(8, 0))
 
     def update_status(self, text):
         self._status_label.config(text=text)
@@ -142,7 +142,7 @@ class AutoPromptGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("⚡ Auto-Prompt Workflow Runner")
+        self.root.title("🤖 Auto-Prompt Workflow Runner [PATCHED]")
         self.root.geometry("1100x780")
         self.root.minsize(900, 600)
         self.root.configure(bg=COLORS["bg_dark"])
@@ -263,9 +263,9 @@ class AutoPromptGUI:
         # Close handler
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # STYLES
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _setup_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
@@ -368,25 +368,25 @@ class AutoPromptGUI:
         style.map("Vertical.TScrollbar",
                   background=[("active", COLORS["bg_hover"]), ("pressed", COLORS["accent"])])
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # BUILD UI
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _build_ui(self):
-        # ── Top Bar ──
+        # â”€â”€ Top Bar â”€â”€
         top_bar = tk.Frame(self.root, bg=COLORS["bg_mid"], height=56)
         top_bar.pack(fill=tk.X, side=tk.TOP)
         top_bar.pack_propagate(False)
 
-        tk.Label(top_bar, text="⚡", font=("Segoe UI", 20),
+        tk.Label(top_bar, text="âš¡", font=("Segoe UI", 20),
                  bg=COLORS["bg_mid"], fg=COLORS["yellow"]).pack(side=tk.LEFT, padx=(16, 4))
         tk.Label(top_bar, text="Auto-Prompt Workflow Runner", font=("Segoe UI", 14, "bold"),
                  bg=COLORS["bg_mid"], fg=COLORS["text"]).pack(side=tk.LEFT)
-        tk.Label(top_bar, text="Chain prompts → Auto develop", font=("Segoe UI", 9),
+        tk.Label(top_bar, text="Chain prompts â†’ Auto develop", font=("Segoe UI", 9),
                  bg=COLORS["bg_mid"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(12, 0))
 
         # Settings button
         settings_btn = tk.Button(
-            top_bar, text="⚙ Settings", font=("Segoe UI", 9),
+            top_bar, text="âš™ Settings", font=("Segoe UI", 9),
             bg=COLORS["bg_card"], fg=COLORS["text_dim"],
             activebackground=COLORS["bg_hover"], activeforeground=COLORS["text"],
             relief="flat", bd=0, padx=12, pady=4,
@@ -396,7 +396,7 @@ class AutoPromptGUI:
 
         # AI Chat toggle button
         self._chat_toggle_btn = tk.Button(
-            top_bar, text="🤖 AI Chat", font=("Segoe UI", 9, "bold"),
+            top_bar, text="ðŸ¤– AI Chat", font=("Segoe UI", 9, "bold"),
             bg=COLORS["purple"], fg="#ffffff",
             activebackground=COLORS["accent"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=12, pady=4,
@@ -404,12 +404,12 @@ class AutoPromptGUI:
         )
         self._chat_toggle_btn.pack(side=tk.RIGHT, padx=(0, 6))
 
-        # ── Main horizontal split ──
+        # â”€â”€ Main horizontal split â”€â”€
         main = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
                                bg=COLORS["border"], sashwidth=2, sashrelief="flat")
         main.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
-        # ── LEFT: Workflow Sidebar ──
+        # â”€â”€ LEFT: Workflow Sidebar â”€â”€
         sidebar = tk.Frame(main, bg=COLORS["bg_mid"], width=220)
         main.add(sidebar, minsize=180, width=220)
 
@@ -428,7 +428,7 @@ class AutoPromptGUI:
         add_btn.pack(side=tk.RIGHT)
 
         self._unhide_btn = tk.Button(
-            sidebar_header, text="👁 Show", font=("Segoe UI", 8),
+            sidebar_header, text="ðŸ‘ Show", font=("Segoe UI", 8),
             bg=COLORS["bg_mid"], fg=COLORS["text_dim"],
             activebackground=COLORS["bg_hover"], activeforeground=COLORS["text"],
             relief="flat", bd=0, padx=6, pady=2,
@@ -472,11 +472,11 @@ class AutoPromptGUI:
         self._sidebar_canvas.bind("<Enter>", lambda e: self._sidebar_canvas.bind_all("<MouseWheel>", _on_sidebar_mousewheel))
         self._sidebar_canvas.bind("<Leave>", lambda e: self._sidebar_canvas.unbind_all("<MouseWheel>"))
 
-        # ── RIGHT: Main content area ──
+        # â”€â”€ RIGHT: Main content area â”€â”€
         right = tk.Frame(main, bg=COLORS["bg_dark"])
         main.add(right, minsize=600)
 
-        # ── Right top split: config bar + steps ──
+        # â”€â”€ Right top split: config bar + steps â”€â”€
         # Config bar
         config_bar = tk.Frame(right, bg=COLORS["bg_card"], height=50)
         config_bar.pack(fill=tk.X, padx=12, pady=(10, 0))
@@ -486,7 +486,7 @@ class AutoPromptGUI:
         self._target_frame = tk.Frame(config_bar, bg=COLORS["bg_card"])
         self._target_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 4))
 
-        self._project_label = tk.Label(self._target_frame, text="📁 Project:", font=("Segoe UI", 9),
+        self._project_label = tk.Label(self._target_frame, text="ðŸ“ Project:", font=("Segoe UI", 9),
                  bg=COLORS["bg_card"], fg=COLORS["text_dim"])
         self._project_label.pack(side=tk.LEFT, padx=(0, 4))
         
@@ -510,13 +510,13 @@ class AutoPromptGUI:
 
         self._cloud_target_label = tk.Label(
             self._target_frame, 
-            text="🌐 Target: Google AI Studio (Web Workspace · No local folder needed)", 
+            text="ðŸŒ Target: Google AI Studio (Web Workspace Â· No local folder needed)", 
             font=("Segoe UI", 9, "bold"),
             bg=COLORS["bg_card"], fg=COLORS["cyan"]
         )
 
         self._open_url_btn = tk.Button(
-            self._target_frame, text="🌐 Open AI Studio", font=("Segoe UI", 8, "bold"),
+            self._target_frame, text="ðŸŒ Open AI Studio", font=("Segoe UI", 8, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["cyan"],
             activebackground=COLORS["bg_hover"], activeforeground=COLORS["cyan"],
             relief="flat", bd=0, padx=8,
@@ -524,14 +524,14 @@ class AutoPromptGUI:
         )
 
         self._republish_btn = tk.Button(
-            self._target_frame, text="🚀 Publish / Republish", font=("Segoe UI", 8, "bold"),
+            self._target_frame, text="ðŸš€ Publish / Republish", font=("Segoe UI", 8, "bold"),
             bg=COLORS["green_dim"], fg=COLORS["green"],
             activebackground=COLORS["green"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=8,
             command=self._on_manual_republish,
         )
 
-        self._browser_usage_var = tk.StringVar(value="Model: — | AI Studio usage: —")
+        self._browser_usage_var = tk.StringVar(value="Model: â€” | AI Studio usage: â€”")
         self._browser_usage_label = tk.Label(
             self._target_frame, textvariable=self._browser_usage_var,
             font=("Segoe UI", 8), bg=COLORS["bg_card"], fg=COLORS["text_dim"],
@@ -569,19 +569,19 @@ class AutoPromptGUI:
                  relief="flat", justify="center").pack(side=tk.LEFT, padx=(0, 4))
         
         tk.Button(
-            config_bar, text="⚡ Apply", font=("Segoe UI", 8, "bold"),
+            config_bar, text="âš¡ Apply", font=("Segoe UI", 8, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["yellow"],
             activebackground=COLORS["bg_hover"], activeforeground=COLORS["yellow"],
             relief="flat", bd=0, padx=8, pady=2,
             command=self._apply_global_delay,
         ).pack(side=tk.LEFT, padx=(0, 8))
 
-        # ── Vertical split: steps editor on top, execution log on bottom ──
+        # â”€â”€ Vertical split: steps editor on top, execution log on bottom â”€â”€
         content_pane = tk.PanedWindow(right, orient=tk.VERTICAL,
                                        bg=COLORS["border"], sashwidth=2, sashrelief="flat")
         content_pane.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
 
-        # ── STEP EDITOR ──
+        # â”€â”€ STEP EDITOR â”€â”€
         steps_outer = tk.Frame(content_pane, bg=COLORS["bg_card"])
         content_pane.add(steps_outer, minsize=200, height=340)
 
@@ -624,7 +624,7 @@ class AutoPromptGUI:
         vars_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         save_wf_btn = tk.Button(
-            wf_actions, text="💾 Save", font=("Segoe UI", 9),
+            wf_actions, text="ðŸ’¾ Save", font=("Segoe UI", 9),
             bg=COLORS["bg_input"], fg=COLORS["text_dim"],
             activebackground=COLORS["bg_hover"], activeforeground=COLORS["text"],
             relief="flat", bd=0, padx=10, pady=3,
@@ -633,7 +633,7 @@ class AutoPromptGUI:
         save_wf_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         delete_wf_btn = tk.Button(
-            wf_actions, text="🗑 Delete Workflow", font=("Segoe UI", 9),
+            wf_actions, text="ðŸ—‘ Delete Workflow", font=("Segoe UI", 9),
             bg=COLORS["bg_input"], fg=COLORS["red"],
             activebackground=COLORS["red_dim"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=10, pady=3,
@@ -687,7 +687,7 @@ class AutoPromptGUI:
         self._steps_canvas.bind("<Enter>", lambda e: self._steps_canvas.bind_all("<MouseWheel>", _on_steps_mousewheel))
         self._steps_canvas.bind("<Leave>", lambda e: self._steps_canvas.unbind_all("<MouseWheel>"))
 
-        # ── EXECUTION LOG ──
+        # â”€â”€ EXECUTION LOG â”€â”€
         exec_outer = tk.Frame(content_pane, bg=COLORS["bg_mid"])
         content_pane.add(exec_outer, minsize=180)
 
@@ -710,7 +710,7 @@ class AutoPromptGUI:
         ctrl_frame.pack(side=tk.RIGHT)
 
         self._run_btn = tk.Button(
-            ctrl_frame, text="▶  Run", font=("Segoe UI", 10, "bold"),
+            ctrl_frame, text="â–¶  Run", font=("Segoe UI", 10, "bold"),
             bg=COLORS["green_dim"], fg=COLORS["green"],
             activebackground=COLORS["green"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=14, pady=4,
@@ -719,7 +719,7 @@ class AutoPromptGUI:
         self._run_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self._pause_btn = tk.Button(
-            ctrl_frame, text="⏸ Pause", font=("Segoe UI", 10),
+            ctrl_frame, text="â¸ Pause", font=("Segoe UI", 10),
             bg=COLORS["bg_card"], fg=COLORS["yellow"],
             activebackground=COLORS["yellow"], activeforeground="#000000",
             relief="flat", bd=0, padx=14, pady=4,
@@ -729,7 +729,7 @@ class AutoPromptGUI:
         self._pause_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self._stop_btn = tk.Button(
-            ctrl_frame, text="⏹ Stop", font=("Segoe UI", 10),
+            ctrl_frame, text="â¹ Stop", font=("Segoe UI", 10),
             bg=COLORS["bg_card"], fg=COLORS["red"],
             activebackground=COLORS["red"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=14, pady=4,
@@ -766,7 +766,7 @@ class AutoPromptGUI:
         ).pack(side=tk.RIGHT, padx=(4, 0))
 
         self._refresh_step_cb = tk.Checkbutton(
-            loop_row, text="🔄 Refresh on Step", variable=self._refresh_step_var,
+            loop_row, text="ðŸ”„ Refresh on Step", variable=self._refresh_step_var,
             bg=COLORS["bg_mid"], fg=COLORS["yellow"],
             selectcolor=COLORS["bg_dark"], activebackground=COLORS["bg_mid"],
             font=("Segoe UI", 8, "bold"),
@@ -774,7 +774,7 @@ class AutoPromptGUI:
         )
 
         self._auto_rotate_cb = tk.Checkbutton(
-            loop_row, text="🔀 Auto-Switch Model", variable=self._auto_rotate_var,
+            loop_row, text="ðŸ”€ Auto-Switch Model", variable=self._auto_rotate_var,
             bg=COLORS["bg_mid"], fg=COLORS["cyan"],
             selectcolor=COLORS["bg_dark"], activebackground=COLORS["bg_mid"],
             font=("Segoe UI", 8, "bold"),
@@ -782,7 +782,7 @@ class AutoPromptGUI:
         )
 
         self._auto_republish_cb = tk.Checkbutton(
-            loop_row, text="🚀 Auto-Publish on Completion", variable=self._auto_republish_var,
+            loop_row, text="ðŸš€ Auto-Publish on Completion", variable=self._auto_republish_var,
             bg=COLORS["bg_mid"], fg=COLORS["green"],
             selectcolor=COLORS["bg_dark"], activebackground=COLORS["bg_mid"],
             font=("Segoe UI", 8, "bold"),
@@ -790,7 +790,7 @@ class AutoPromptGUI:
         )
 
         tk.Checkbutton(
-            loop_row, text="🛸 Context Agent", variable=self._context_agent_var,
+            loop_row, text="ðŸ›¸ Context Agent", variable=self._context_agent_var,
             bg=COLORS["bg_mid"], fg=COLORS["cyan"],
             selectcolor=COLORS["bg_dark"], activebackground=COLORS["bg_mid"],
             font=("Segoe UI", 9, "bold"),
@@ -868,7 +868,7 @@ class AutoPromptGUI:
                  bg=COLORS["bg_mid"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=12)
 
         self._editor_status = tk.Label(
-            status_bar, text="⚡ Antigravity", font=("Segoe UI", 8, "bold"),
+            status_bar, text="âš¡ Antigravity", font=("Segoe UI", 8, "bold"),
             bg=COLORS["bg_mid"], fg=COLORS["accent"],
         )
         self._editor_status.pack(side=tk.RIGHT, padx=12)
@@ -879,15 +879,15 @@ class AutoPromptGUI:
         )
         self._chatbot_status_label.pack(side=tk.RIGHT, padx=(0, 12))
 
-        # ── AI CHAT PANEL (initially hidden) ──
+        # â”€â”€ AI CHAT PANEL (initially hidden) â”€â”€
         self._chat_panel = tk.Frame(self.root, bg=COLORS["bg_card"], width=340)
-        # Not packed yet — toggled by _toggle_chat_panel
+        # Not packed yet â€” toggled by _toggle_chat_panel
 
         # Chat panel header
         chat_header = tk.Frame(self._chat_panel, bg=COLORS["bg_mid"])
         chat_header.pack(fill=tk.X)
 
-        tk.Label(chat_header, text="🤖 AI Assistant", font=("Segoe UI", 11, "bold"),
+        tk.Label(chat_header, text="ðŸ¤– AI Assistant", font=("Segoe UI", 11, "bold"),
                  bg=COLORS["bg_mid"], fg=COLORS["text"]).pack(side=tk.LEFT, padx=12, pady=8)
 
         self._chat_status_var = tk.StringVar(value=self.chatbot.status_text)
@@ -895,7 +895,7 @@ class AutoPromptGUI:
                  bg=COLORS["bg_mid"], fg=COLORS["text_dim"]).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
         tk.Button(
-            chat_header, text="🗑", font=("Segoe UI", 9),
+            chat_header, text="ðŸ—‘", font=("Segoe UI", 9),
             bg=COLORS["bg_mid"], fg=COLORS["text_dim"],
             activebackground=COLORS["bg_hover"],
             relief="flat", bd=0, padx=6,
@@ -907,7 +907,7 @@ class AutoPromptGUI:
         actions_frame.pack(fill=tk.X, padx=8, pady=(6, 4))
 
         tk.Button(
-            actions_frame, text="✨ Generate Workflow", font=("Segoe UI", 8, "bold"),
+            actions_frame, text="âœ¨ Generate Workflow", font=("Segoe UI", 8, "bold"),
             bg=COLORS["green_dim"], fg=COLORS["green"],
             activebackground=COLORS["green"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=8, pady=3,
@@ -915,7 +915,7 @@ class AutoPromptGUI:
         ).pack(side=tk.LEFT, padx=(0, 4))
 
         tk.Button(
-            actions_frame, text="🔧 Refine Step", font=("Segoe UI", 8, "bold"),
+            actions_frame, text="ðŸ”§ Refine Step", font=("Segoe UI", 8, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["accent"],
             activebackground=COLORS["accent"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=8, pady=3,
@@ -923,7 +923,7 @@ class AutoPromptGUI:
         ).pack(side=tk.LEFT, padx=(4, 4))
 
         tk.Button(
-            actions_frame, text="✨ Suggest", font=("Segoe UI", 8, "bold"),
+            actions_frame, text="âœ¨ Suggest", font=("Segoe UI", 8, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["green"],
             activebackground=COLORS["green"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=8, pady=3,
@@ -931,7 +931,7 @@ class AutoPromptGUI:
         ).pack(side=tk.LEFT, padx=(0, 4))
 
         tk.Button(
-            actions_frame, text="📋 Sync", font=("Segoe UI", 8, "bold"),
+            actions_frame, text="ðŸ“‹ Sync", font=("Segoe UI", 8, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["purple"],
             activebackground=COLORS["purple"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=8, pady=3,
@@ -939,7 +939,7 @@ class AutoPromptGUI:
         ).pack(side=tk.LEFT, padx=(0, 6))
 
         tk.Checkbutton(
-            actions_frame, text="🔄 Auto-Pilot", variable=self._auto_pilot_var,
+            actions_frame, text="ðŸ”„ Auto-Pilot", variable=self._auto_pilot_var,
             font=("Segoe UI", 8), bg=COLORS["bg_card"], fg=COLORS["text_dim"],
             activebackground=COLORS["bg_card"], activeforeground=COLORS["text"],
             selectcolor=COLORS["bg_input"], bd=0
@@ -986,7 +986,7 @@ class AutoPromptGUI:
         self._chat_input.insert("1.0", "")
 
         send_chat_btn = tk.Button(
-            chat_input_frame, text="Send  ➤", font=("Segoe UI", 9, "bold"),
+            chat_input_frame, text="Send  âž¤", font=("Segoe UI", 9, "bold"),
             bg=COLORS["accent"], fg="#ffffff",
             activebackground=COLORS["accent_hover"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=14, pady=4,
@@ -995,22 +995,22 @@ class AutoPromptGUI:
         send_chat_btn.pack(side=tk.RIGHT)
 
         tk.Button(
-            chat_input_frame, text="✨ Load Steps", font=("Segoe UI", 8),
+            chat_input_frame, text="âœ¨ Load Steps", font=("Segoe UI", 8),
             bg=COLORS["bg_input"], fg=COLORS["accent"],
             activebackground=COLORS["bg_hover"],
             relief="flat", bd=0, padx=8,
             command=self._on_manual_load_steps,
         ).pack(side=tk.RIGHT, padx=4)
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # CANVAS HELPERS
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _on_canvas_resize(self, event):
         self._steps_canvas.itemconfig(self._steps_canvas_window, width=event.width)
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # SIDEBAR
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _populate_workflow_list(self):
         for child in self._sidebar_list_frame.winfo_children():
             child.destroy()
@@ -1039,7 +1039,7 @@ class AutoPromptGUI:
                 accent_bar = tk.Frame(btn_frame, bg=COLORS["accent"], width=3)
                 accent_bar.pack(side=tk.LEFT, fill=tk.Y)
 
-            icon = "⏳" if is_running else ("▶" if is_active else "○")
+            icon = "â³" if is_running else ("â–¶" if is_active else "â—‹")
             label = tk.Label(
                 btn_frame, text=f"  {icon}  {name}",
                 font=btn_font, bg=btn_bg, fg=btn_fg,
@@ -1048,7 +1048,7 @@ class AutoPromptGUI:
             label.pack(fill=tk.X, padx=4)
 
             desc = tk.Label(
-                btn_frame, text=f"     {len(wf.steps)} steps" + (" · RUNNING" if is_running else ""),
+                btn_frame, text=f"     {len(wf.steps)} steps" + (" Â· RUNNING" if is_running else ""),
                 font=("Segoe UI", 8), bg=btn_bg, fg=COLORS["text_muted"],
                 anchor="w",
             )
@@ -1138,9 +1138,9 @@ class AutoPromptGUI:
         tk.Button(dialog, text="Close", font=("Segoe UI", 10), bg=COLORS["bg_input"], fg=COLORS["text"],
                   relief="flat", padx=20, pady=6, command=dialog.destroy).pack(pady=20)
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # STEP EDITOR
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _render_steps(self):
         """Render all steps of the active workflow in the editor"""
         for child in self._steps_inner.winfo_children():
@@ -1156,7 +1156,7 @@ class AutoPromptGUI:
     def _create_step_card(self, index: int, step: WorkflowStep):
         """Create a single step card widget"""
         status_color = STATUS_COLORS.get(step.status, COLORS["text_muted"])
-        status_icon = STATUS_ICONS.get(step.status, "○")
+        status_icon = STATUS_ICONS.get(step.status, "â—‹")
 
         card = tk.Frame(self._steps_inner, bg=COLORS["bg_input"], bd=0,
                          highlightbackground=COLORS["border"], highlightthickness=1)
@@ -1170,7 +1170,7 @@ class AutoPromptGUI:
         tk.Label(header, text=status_icon, font=("Segoe UI", 10),
                  bg=COLORS["bg_input"], fg=status_color).pack(side=tk.LEFT, padx=(0, 6))
 
-        # Step name — editable
+        # Step name â€” editable
         name_var = tk.StringVar(value=step.name)
         name_entry = tk.Entry(
             header, textvariable=name_var,
@@ -1183,9 +1183,9 @@ class AutoPromptGUI:
 
         # Step success/failure badges
         if getattr(step, "success_count", 0) > 0 or getattr(step, "failure_count", 0) > 0:
-            badge_text = f"✅{step.success_count}"
+            badge_text = f"âœ…{step.success_count}"
             if step.failure_count > 0:
-                badge_text += f" ❌{step.failure_count}"
+                badge_text += f" âŒ{step.failure_count}"
             tk.Label(
                 header, text=badge_text,
                 font=("Segoe UI", 8, "bold"),
@@ -1223,7 +1223,7 @@ class AutoPromptGUI:
 
         if index > 0:
             tk.Button(
-                btn_frame, text="↑", font=("Segoe UI", 9),
+                btn_frame, text="â†‘", font=("Segoe UI", 9),
                 bg=COLORS["bg_input"], fg=COLORS["text_dim"],
                 activebackground=COLORS["bg_hover"],
                 relief="flat", bd=0, padx=4,
@@ -1232,7 +1232,7 @@ class AutoPromptGUI:
 
         if index < len(self._active_workflow.steps) - 1:
             tk.Button(
-                btn_frame, text="↓", font=("Segoe UI", 9),
+                btn_frame, text="â†“", font=("Segoe UI", 9),
                 bg=COLORS["bg_input"], fg=COLORS["text_dim"],
                 activebackground=COLORS["bg_hover"],
                 relief="flat", bd=0, padx=4,
@@ -1240,7 +1240,7 @@ class AutoPromptGUI:
             ).pack(side=tk.LEFT)
 
         tk.Button(
-            btn_frame, text="✕", font=("Segoe UI", 9),
+            btn_frame, text="âœ•", font=("Segoe UI", 9),
             bg=COLORS["bg_input"], fg=COLORS["red"],
             activebackground=COLORS["red_dim"],
             relief="flat", bd=0, padx=4,
@@ -1249,7 +1249,7 @@ class AutoPromptGUI:
 
         # AI Refine Button
         tk.Button(
-            btn_frame, text="✨ AI", font=("Segoe UI", 8, "bold"),
+            btn_frame, text="âœ¨ AI", font=("Segoe UI", 8, "bold"),
             bg=COLORS["bg_input"], fg=COLORS["cyan"],
             activebackground=COLORS["bg_hover"], activeforeground=COLORS["cyan"],
             relief="flat", bd=0, padx=6,
@@ -1325,9 +1325,9 @@ class AutoPromptGUI:
         # Scroll to bottom
         self.root.after(100, lambda: self._steps_canvas.yview_moveto(1.0))
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # WORKFLOW CRUD
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _new_workflow(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("New Workflow")
@@ -1384,7 +1384,7 @@ class AutoPromptGUI:
             g_delay = float(global_delay_str)
             for step in self._active_workflow.steps:
                 step.delay_after = g_delay
-            self._log(f"⚡ Applied global delay {g_delay}s to all steps in '{self._active_workflow.name}'.", "info")
+            self._log(f"âš¡ Applied global delay {g_delay}s to all steps in '{self._active_workflow.name}'.", "info")
             self._render_steps()
         except ValueError:
             messagebox.showerror("Error", "Invalid delay value.")
@@ -1459,9 +1459,9 @@ class AutoPromptGUI:
 
         self._populate_workflow_list()
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # VARIABLES EDITOR
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _edit_variables(self):
         if not self._active_workflow:
             return
@@ -1516,9 +1516,9 @@ class AutoPromptGUI:
                    relief="flat", bd=0, padx=20, pady=6,
                    command=save).pack(pady=20)
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # EXECUTION
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _get_engine(self, wf_name=None):
         if wf_name is None:
@@ -1563,7 +1563,7 @@ class AutoPromptGUI:
             self._start_selected_workflow()
         except Exception as e:
             logger.exception("Workflow could not be started")
-            self._log(f"❌ Workflow start failed: {type(e).__name__}: {e}", "error")
+            self._log(f"âŒ Workflow start failed: {type(e).__name__}: {e}", "error")
             self._status_var.set("Could not start workflow")
             if self._active_workflow:
                 self._destroy_workflow_overlay(self._active_workflow.name)
@@ -1614,7 +1614,7 @@ class AutoPromptGUI:
             if proj_str:
                 self._active_workflow.variables.setdefault("project_path", proj_str)
 
-        self._log(f"▶ Starting workflow: {self._active_workflow.name}", "info")
+        self._log(f"â–¶ Starting workflow: {self._active_workflow.name}", "info")
         self._log(f"  Editor: {self._get_bridge().editor_display_name}  |  Mode: {self._get_bridge().mode}", "dim")
 
         # Wire up the correct send function based on mode
@@ -1630,7 +1630,7 @@ class AutoPromptGUI:
                 
                 self._get_engine().send_and_wait_fn = self.chatbot.send_message_blocking
                 self._get_engine().send_prompt_fn = None
-                self._log("  🤖 Smart Routing: sending prompt directly to Internal AI (Pollinations)", "info")
+                self._log("  ðŸ¤– Smart Routing: sending prompt directly to Internal AI (Pollinations)", "info")
                 if not self._chat_panel_visible:
                     self._toggle_chat_panel()
             else:
@@ -1641,13 +1641,13 @@ class AutoPromptGUI:
                         if not pw.is_connected():
                             pw.connect_cdp()
                         if pw.is_connected():
-                            self._log("  🟢 Playwright DOM Engine Active: workflow-isolated AI Studio chat tab", "success")
+                            self._log("  ðŸŸ¢ Playwright DOM Engine Active: workflow-isolated AI Studio chat tab", "success")
                     except Exception as e:
                         logger.debug(f"Playwright CDP check: {e}")
 
                 self._get_engine().send_and_wait_fn = lambda p, c="", wf=self._active_workflow.name: self._send_external_with_logging(p, c, wf_name=wf)
                 self._get_engine().send_prompt_fn = None
-                self._log(f"  🤖 Smart Routing: will type into {self._get_bridge().editor_display_name} + wait for completion", "info")
+                self._log(f"  ðŸ¤– Smart Routing: will type into {self._get_bridge().editor_display_name} + wait for completion", "info")
         else:
             self._get_engine().send_and_wait_fn = None
             
@@ -1663,7 +1663,7 @@ class AutoPromptGUI:
                 pass
 
         if self._get_bridge().mode == "auto_interact" and global_delay is not None and global_delay > 10.0:
-            self._log(f"⚡ Smart Auto-Interact: AI completion is detected from the editor state. Bypassing the {global_delay}s blind delay.", "info")
+            self._log(f"âš¡ Smart Auto-Interact: AI completion is detected from the editor state. Bypassing the {global_delay}s blind delay.", "info")
             global_delay = 0.0
             self._global_delay_var.set("0")
             self._save_settings()
@@ -1701,14 +1701,14 @@ class AutoPromptGUI:
     def _pause_resume(self):
         if self._get_engine().is_paused:
             self._get_engine().resume()
-            self._pause_btn.config(text="⏸ Pause")
+            self._pause_btn.config(text="â¸ Pause")
             self._status_var.set("Running...")
-            self._log("▶ Resumed", "info")
+            self._log("â–¶ Resumed", "info")
         else:
             self._get_engine().pause()
-            self._pause_btn.config(text="▶ Resume")
+            self._pause_btn.config(text="â–¶ Resume")
             self._status_var.set("Paused")
-            self._log("⏸ Paused", "warning")
+            self._log("â¸ Paused", "warning")
 
     def _stop_workflow(self, wf_name=None):
         if wf_name is None:
@@ -1717,7 +1717,7 @@ class AutoPromptGUI:
             return
         self._get_engine(wf_name).cancel()
         self._get_bridge(wf_name).cancel_wait()
-        self._log(f"⏹ Cancelling workflow '{wf_name}'...", "warning")
+        self._log(f"â¹ Cancelling workflow '{wf_name}'...", "warning")
         self._destroy_workflow_overlay(wf_name)
 
     def _destroy_workflow_overlay(self, wf_name):
@@ -1730,9 +1730,9 @@ class AutoPromptGUI:
         if self._active_workflow and self._active_workflow.name == wf_name:
             self._overlay = None
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # ENGINE CALLBACKS (called from background thread)
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _send_external_with_logging(self, prompt: str, context: str = "", wf_name: str = None) -> str:
         """Helper to send prompt to external editor AND log it in internal chatbot history"""
         # Log to chatbot so the UI panel stays in sync as a 'summary' of conversation
@@ -1741,7 +1741,7 @@ class AutoPromptGUI:
             display_prompt = f"[Context: {context}]\n\n{prompt}"
         
         self.chatbot.add_history("user", prompt) # Keep it simple in history
-        self.root.after(0, self._append_chat, f"↗ Sending to {self._get_bridge(wf_name).editor_display_name}: {prompt}\n", "system")
+        self.root.after(0, self._append_chat, f"â†— Sending to {self._get_bridge(wf_name).editor_display_name}: {prompt}\n", "system")
         
         # Do the actual interaction
         result = self._get_bridge(wf_name).send_and_wait(prompt)
@@ -1772,7 +1772,7 @@ class AutoPromptGUI:
         self.root.after(0, self._log, f"Workflow '{display_name}' {status}.", log_status)
         
         if status == "completed":
-            self.root.after(0, lambda: self._append_chat(f"🏁 Workflow '{workflow.name}' completed successfully!\n\n", "system"))
+            self.root.after(0, lambda: self._append_chat(f"ðŸ Workflow '{workflow.name}' completed successfully!\n\n", "system"))
             bridge = self._get_bridge(wf_name)
             if bridge.editor == "google_ai_studio" and bridge.auto_republish_test:
                 self.root.after(1000, lambda name=wf_name: self._on_manual_republish(name))
@@ -1780,13 +1780,13 @@ class AutoPromptGUI:
             if is_active and self._auto_pilot_var.get():
                 self.root.after(1500, self._on_autopilot_next)
         elif status == "cancelled":
-            self.root.after(0, lambda: self._append_chat(f"⏹️ Workflow '{workflow.name}' was cancelled.\n\n", "system"))
+            self.root.after(0, lambda: self._append_chat(f"â¹ï¸ Workflow '{workflow.name}' was cancelled.\n\n", "system"))
         elif status == "failed" or status.startswith("error"):
-            self.root.after(0, lambda: self._append_chat(f"❌ Workflow '{workflow.name}' failed: {status}\n\n", "error"))
+            self.root.after(0, lambda: self._append_chat(f"âŒ Workflow '{workflow.name}' failed: {status}\n\n", "error"))
 
     def _on_autopilot_next(self):
         """Auto-Pilot: Suggest and execute next step"""
-        self._append_chat("🔄 Auto-Pilot: Thinking about the next step...\n", "system")
+        self._append_chat("ðŸ”„ Auto-Pilot: Thinking about the next step...\n", "system")
         # Ask AI for next step
         self._ai_generate_workflow("Suggest the next logical development step based on my project context. RETURN STEPS ONLY.")
 
@@ -1795,7 +1795,7 @@ class AutoPromptGUI:
         self.root.after(0, self._ui_step_start, index, step.name)
 
     def _ui_step_start(self, index: int, name: str):
-        self._log(f"⏳ Step {index + 1}: {name}", "step")
+        self._log(f"â³ Step {index + 1}: {name}", "step")
         wf_name = self._active_workflow.name if self._active_workflow else None
         self._overlay = self._overlays.get(wf_name)
         if self._overlay is not None:
@@ -1809,7 +1809,7 @@ class AutoPromptGUI:
         display_name = self.bridge.editor_display_name
         
         # Update Status Bar
-        icon = EditorBridge.EDITORS.get(editor_key, {}).get("icon", "⚡")
+        icon = EditorBridge.EDITORS.get(editor_key, {}).get("icon", "âš¡")
         self._editor_status.config(text=f"{icon} {display_name}")
         self._status_var.set(f"Editor: {display_name} | Mode: {self.bridge.mode}")
         self._log(f"Editor switched to {display_name}", "info")
@@ -1854,11 +1854,11 @@ class AutoPromptGUI:
             self.root.after(0, self._log, f"[{label}] Publishing or republishing the Google AI Studio app...", "info")
             success = bridge.republish_and_test_ai_studio()
             if success:
-                self.root.after(0, self._log, "✅ Publish/republish completed. AI Studio remains on the publish panel.", "success")
+                self.root.after(0, self._log, "âœ… Publish/republish completed. AI Studio remains on the publish panel.", "success")
                 if not wf_name or (self._active_workflow and self._active_workflow.name == wf_name):
                     self.root.after(0, self._status_var.set, "App published")
             else:
-                self.root.after(0, self._log, "⚠️ Publish/republish did not confirm deployment completion.", "warning")
+                self.root.after(0, self._log, "âš ï¸ Publish/republish did not confirm deployment completion.", "warning")
                 if not wf_name or (self._active_workflow and self._active_workflow.name == wf_name):
                     self.root.after(0, self._status_var.set, "Ready")
         threading.Thread(target=_task, daemon=True).start()
@@ -1879,7 +1879,7 @@ class AutoPromptGUI:
             if hasattr(self, "_cloud_target_label"):
                 self._cloud_target_label.pack(side=tk.LEFT, padx=(0, 8))
             if hasattr(self, "_open_url_btn"):
-                self._open_url_btn.config(text="🌐 Open AI Studio", fg=COLORS["cyan"])
+                self._open_url_btn.config(text="ðŸŒ Open AI Studio", fg=COLORS["cyan"])
                 self._open_url_btn.pack(side=tk.LEFT, padx=(0, 6))
             if hasattr(self, "_republish_btn"):
                 self._republish_btn.pack(side=tk.LEFT, padx=(0, 6))
@@ -1915,7 +1915,7 @@ class AutoPromptGUI:
             
             # Re-pack local folder controls inside target frame
             if hasattr(self, "_project_label"):
-                self._project_label.config(text="📁 Project:")
+                self._project_label.config(text="ðŸ“ Project:")
                 self._project_label.pack(side=tk.LEFT, padx=(0, 4))
             if hasattr(self, "_project_entry"):
                 self._project_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=3)
@@ -1969,16 +1969,16 @@ class AutoPromptGUI:
                     if pw.is_connected():
                         state = browser_state or pw.get_chat_status()
                         if state.get("requires_login"):
-                            self._open_url_btn.config(text="🟡 Google sign-in needed", fg=COLORS["yellow"])
+                            self._open_url_btn.config(text="ðŸŸ¡ Google sign-in needed", fg=COLORS["yellow"])
                         elif state.get("chat_ready"):
-                            self._open_url_btn.config(text="🟢 AI Studio chat detected", fg=COLORS["green"])
+                            self._open_url_btn.config(text="ðŸŸ¢ AI Studio chat detected", fg=COLORS["green"])
                         else:
-                            self._open_url_btn.config(text="🟡 AI Studio tab · waiting for chat", fg=COLORS["yellow"])
+                            self._open_url_btn.config(text="ðŸŸ¡ AI Studio tab Â· waiting for chat", fg=COLORS["yellow"])
                         model = state.get("model") or "unknown"
                         usage = state.get("usage_text") or "quota counter not exposed"
                         if state.get("usage_remaining") is not None:
-                            usage = f"{state['usage_remaining']} requests remain · {usage}"
-                        counts = f"steps {state.get('submitted', 0)} · switches {state.get('quota_switches', 0)}"
+                            usage = f"{state['usage_remaining']} requests remain Â· {usage}"
+                        counts = f"steps {state.get('submitted', 0)} Â· switches {state.get('quota_switches', 0)}"
                         self._browser_usage_var.set(f"Model: {model} | {counts} | {usage}")
                         return
                 except Exception:
@@ -1987,18 +1987,18 @@ class AutoPromptGUI:
             if is_connected:
                 url = getattr(self.bridge, "detected_browser_url", "")
                 if url and "aistudio" in url:
-                    self._open_url_btn.config(text="🔗 AI Studio (OS Window)", fg=COLORS["yellow"])
+                    self._open_url_btn.config(text="ðŸ”— AI Studio (OS Window)", fg=COLORS["yellow"])
                 else:
-                    self._open_url_btn.config(text="🔗 Connected", fg=COLORS["green"])
+                    self._open_url_btn.config(text="ðŸ”— Connected", fg=COLORS["green"])
                 bridge = self._get_bridge()
                 state = browser_state or {}
                 model = state.get("model") or bridge._ai_studio_current_model or "not exposed to OS control"
                 submitted = max(state.get("submitted", 0), bridge._ai_studio_prompt_count)
                 switches = max(state.get("quota_switches", 0), bridge._ai_studio_quota_switch_count)
                 usage = state.get("usage_text") or "live quota amount unavailable"
-                self._browser_usage_var.set(f"Model: {model} | steps {submitted} · switches {switches} | {usage}")
+                self._browser_usage_var.set(f"Model: {model} | steps {submitted} Â· switches {switches} | {usage}")
             else:
-                self._open_url_btn.config(text="🚀 Launch AI Studio (Automated)", fg=COLORS["cyan"])
+                self._open_url_btn.config(text="ðŸš€ Launch AI Studio (Automated)", fg=COLORS["cyan"])
                 if hasattr(self, "_browser_usage_var"):
                     self._browser_usage_var.set("Model: not detected | AI Studio usage: waiting for DOM connection")
 
@@ -2014,10 +2014,10 @@ class AutoPromptGUI:
             def _bg_launch():
                 connected = pw.launch_ai_studio_browser(url)
                 if connected:
-                    self._log("🟢 Playwright DOM automation connected successfully! (Direct DOM control active)", "success")
+                    self._log("ðŸŸ¢ Playwright DOM automation connected successfully! (Direct DOM control active)", "success")
                     self.root.after(0, lambda: self._update_connection_status(True))
                 else:
-                    self._log("⚠️ Could not attach Playwright CDP, opening default browser...", "warning")
+                    self._log("âš ï¸ Could not attach Playwright CDP, opening default browser...", "warning")
                     import webbrowser
                     webbrowser.open(url)
             threading.Thread(target=_bg_launch, daemon=True).start()
@@ -2036,7 +2036,7 @@ class AutoPromptGUI:
             try:
                 if float(cur_delay) > 10.0:
                     self._global_delay_var.set("0")
-                    self._log("⚡ Switched to Auto-Interact: Step Delay Override reset to 0s (AI completion is dynamically detected via OCR/UIA, no blind delay needed).", "info")
+                    self._log("âš¡ Switched to Auto-Interact: Step Delay Override reset to 0s (AI completion is dynamically detected via OCR/UIA, no blind delay needed).", "info")
                     self._save_settings()
             except ValueError:
                 pass
@@ -2055,21 +2055,21 @@ class AutoPromptGUI:
         self.root.after(0, self._ui_step_complete, index, step.name, result)
 
     def _ui_step_complete(self, index: int, name: str, result: str):
-        self._log(f"✅ Step {index + 1} complete: {name}", "success")
+        self._log(f"âœ… Step {index + 1} complete: {name}", "success")
         if result:
             # Show first 200 chars of result
             preview = result[:200].replace("\n", " ")
-            self._log(f"   → {preview}", "dim")
+            self._log(f"   â†’ {preview}", "dim")
         self._render_steps()
 
     def _on_step_error(self, index, step, error, wf_name=None):
         if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name):
-            self.root.after(0, self._log, f"❌ [{wf_name}] Step {index + 1} failed: {step.name} — {error}", "error")
+            self.root.after(0, self._log, f"âŒ [{wf_name}] Step {index + 1} failed: {step.name} â€” {error}", "error")
             return
         self.root.after(0, self._ui_step_error, index, step.name, error)
 
     def _ui_step_error(self, index: int, name: str, error: str):
-        self._log(f"❌ Step {index + 1} failed: {name} — {error}", "error")
+        self._log(f"âŒ Step {index + 1} failed: {name} â€” {error}", "error")
         self._render_steps()
 
     def _on_step_retry(self, index, step, attempt, max_retries, error, wf_name=None):
@@ -2078,8 +2078,8 @@ class AutoPromptGUI:
 
     def _ui_step_retry(self, index: int, name: str, attempt: int, max_retries: int, error: str):
         preview = error[:80].replace("\n", " ") if error else "Execution error"
-        self._log(f"⚠️ Step {index + 1} ({name}) failed: {preview}", "warning")
-        self._log(f"   🔄 Auto-Rerunning Step {index + 1} (Attempt {attempt}/{max_retries}) before proceeding...", "warning")
+        self._log(f"âš ï¸ Step {index + 1} ({name}) failed: {preview}", "warning")
+        self._log(f"   ðŸ”„ Auto-Rerunning Step {index + 1} (Attempt {attempt}/{max_retries}) before proceeding...", "warning")
         self._status_var.set(f"Rerunning Step {index + 1} ({attempt}/{max_retries})...")
         if self._overlay is not None:
             self._overlay.update_status(f"Step {index + 1} Retry {attempt}/{max_retries}: {name}")
@@ -2092,13 +2092,13 @@ class AutoPromptGUI:
         if bridge.editor == "google_ai_studio":
             err_lower = error.lower()
             if any(k in err_lower for k in ["quota", "exhausted", "rate limit", "overloaded", "resource has been exhausted", "try again later"]):
-                self._log("🔀 Quota exhaustion detected during recovery! Switching to another available model...", "warning")
+                self._log("ðŸ”€ Quota exhaustion detected during recovery! Switching to another available model...", "warning")
                 try:
                     bridge.rotate_google_ai_studio_model()
                 except Exception as e:
                     self._log(f"Recovery model switch failed: {e}", "error")
             elif any(k in err_lower for k in ["unexpected error", "reload", "finish what you", "disconnected", "timed out"]):
-                self._log("⚠️ AI Studio did not finish cleanly. Keeping the current page in place for the retry.", "warning")
+                self._log("âš ï¸ AI Studio did not finish cleanly. Keeping the current page in place for the retry.", "warning")
 
     def _update_ui_state(self):
         """Show controls for the selected workflow while leaving other runs independent."""
@@ -2106,7 +2106,7 @@ class AutoPromptGUI:
         engine = self._get_engine(wf_name)
         running = engine.is_running
         self._run_btn.config(state="disabled" if running else "normal")
-        self._pause_btn.config(state="normal" if running else "disabled", text="▶ Resume" if engine.is_paused else "⏸ Pause")
+        self._pause_btn.config(state="normal" if running else "disabled", text="â–¶ Resume" if engine.is_paused else "â¸ Pause")
         self._stop_btn.config(state="normal" if running else "disabled")
         if running:
             self._status_var.set(f"{'Paused' if engine.is_paused else 'Running'}: {wf_name}")
@@ -2154,14 +2154,14 @@ class AutoPromptGUI:
         self.root.after(0, self._ui_loop_wait, countdown)
 
     def _ui_loop_wait(self, countdown: float):
-        detail = f"🔄 Next run in: {int(countdown)}s"
+        detail = f"ðŸ”„ Next run in: {int(countdown)}s"
         self._ai_status_label.config(fg=COLORS["yellow"])
         self._ai_status_var.set(detail)
         self._status_var.set(detail)
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # LOG
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _log(self, message: str, tag: str = ""):
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._log_text.insert("end", f"[{timestamp}] ", "timestamp")
@@ -2171,9 +2171,9 @@ class AutoPromptGUI:
     def _clear_log(self):
         self._log_text.delete("1.0", "end")
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # SETTINGS
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _show_settings(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Settings")
@@ -2182,12 +2182,12 @@ class AutoPromptGUI:
         dialog.transient(self.root)
         dialog.grab_set()
 
-        tk.Label(dialog, text="⚙ Settings", font=("Segoe UI", 14, "bold"),
+        tk.Label(dialog, text="âš™ Settings", font=("Segoe UI", 14, "bold"),
                  bg=COLORS["bg_card"], fg=COLORS["text"]).pack(padx=20, pady=(16, 12), anchor="w")
 
-        # ── AI Chatbot Settings ──
+        # â”€â”€ AI Chatbot Settings â”€â”€
         api_frame = tk.LabelFrame(
-            dialog, text="🤖 AI Assistant Settings",
+            dialog, text="ðŸ¤– AI Assistant Settings",
             bg=COLORS["bg_card"], fg=COLORS["text_dim"],
             font=("Segoe UI", 9, "bold"), bd=1,
             relief="groove", padx=12, pady=8,
@@ -2230,7 +2230,7 @@ class AutoPromptGUI:
 
         api_key_var = tk.StringVar(value=self.chatbot._api_key or "")
         api_entry = tk.Entry(
-            api_frame, textvariable=api_key_var, show="•",
+            api_frame, textvariable=api_key_var, show="â€¢",
             font=("Cascadia Code", 10), bg=COLORS["bg_input"],
             fg=COLORS["text"], insertbackground=COLORS["text"],
             relief="flat", bd=0,
@@ -2256,9 +2256,9 @@ class AutoPromptGUI:
                     messagebox.showwarning("Groq", "Please enter an API key for Groq.")
                     return
                 # Simple connectivity check
-                self._append_chat("🔍 Testing Groq connection...\n", "system")
+                self._append_chat("ðŸ” Testing Groq connection...\n", "system")
                 def check_done(reply):
-                    self.root.after(0, lambda: self._append_chat("✅ Groq connected successfully!\n", "system"))
+                    self.root.after(0, lambda: self._append_chat("âœ… Groq connected successfully!\n", "system"))
                 self.chatbot.send_message("Testing connection. Reply with 'OK'.", callback=check_done)
             
             status = self.chatbot.status_text
@@ -2367,9 +2367,9 @@ class AutoPromptGUI:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export: {e}")
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # MISC
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _browse_project(self):
         path = filedialog.askdirectory(initialdir=self._project_var.get())
         if path:
@@ -2413,7 +2413,7 @@ class AutoPromptGUI:
 
     def _on_context_agent_toggle(self, event=None):
         self.bridge.use_autopilot_context = self._context_agent_var.get()
-        state = "enabled 🚀" if self.bridge.use_autopilot_context else "disabled 🛑"
+        state = "enabled ðŸš€" if self.bridge.use_autopilot_context else "disabled ðŸ›‘"
         self._log(f"Context Agent {state}", "info")
         self._save_settings()
 
@@ -2568,9 +2568,9 @@ class AutoPromptGUI:
         self._save_settings()
         self.root.destroy()
 
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # AI CHATBOT
-    # ═══════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     def _toggle_chat_panel(self):
         """Show/hide the AI chat panel"""
         if self._chat_panel_visible:
@@ -2611,7 +2611,7 @@ class AutoPromptGUI:
 
     def _on_chat_response(self, response: str):
         """Called from background thread when chatbot responds"""
-        self.root.after(0, self._append_chat, f"🤖 {response}\n\n", "bot")
+        self.root.after(0, self._append_chat, f"ðŸ¤– {response}\n\n", "bot")
         
         steps = self._extract_steps_from_text(response)
         if steps:
@@ -2622,7 +2622,7 @@ class AutoPromptGUI:
         if not text: return []
         
         # Pre-clean smart quotes
-        t = text.replace("“", "\"").replace("”", "\"").replace("‘", "'").replace("’", "'")
+        t = text.replace("â€œ", "\"").replace("â€", "\"").replace("â€˜", "'").replace("â€™", "'")
         
         # 1. Try to find the largest bracketed block
         s = t.find("[")
@@ -2689,7 +2689,7 @@ class AutoPromptGUI:
 
     def _on_chat_error(self, error: str):
         """Called from background thread on chatbot error"""
-        self.root.after(0, self._append_chat, f"❌ {error}\n\n", "error")
+        self.root.after(0, self._append_chat, f"âŒ {error}\n\n", "error")
 
     def _on_chat_status(self, status: str):
         """Called from background thread for status updates"""
@@ -2742,14 +2742,14 @@ class AutoPromptGUI:
                     wf.add_step(WorkflowStep(name=name_val, prompt=prompt_val))
             
             self._render_steps()
-            self._append_chat(f"✅ Loaded {len(steps)} steps into '{wf.name}'.\n\n", "system")
+            self._append_chat(f"âœ… Loaded {len(steps)} steps into '{wf.name}'.\n\n", "system")
             
             if auto_start:
                 # Give a moment for the UI to update
                 self.root.after(1000, self._run_workflow)
 
         except Exception as e:
-            self._append_chat(f"❌ Failed to apply steps: {e}\n\n", "error")
+            self._append_chat(f"âŒ Failed to apply steps: {e}\n\n", "error")
 
     def _show_apply_steps_button(self, json_data: str):
         """Show a button in the chat display to apply the detected steps"""
@@ -2757,7 +2757,7 @@ class AutoPromptGUI:
         # Auto-pilot awareness
         auto_start = self._auto_pilot_var.get()
         btn = tk.Button(
-            self._chat_display, text="📋 Load these steps" + (" & Run" if auto_start else ""), 
+            self._chat_display, text="ðŸ“‹ Load these steps" + (" & Run" if auto_start else ""), 
             font=("Segoe UI", 9, "bold"),
             bg=COLORS["green"] if auto_start else COLORS["accent"], fg="#ffffff",
             activebackground=COLORS["green_dim"] if auto_start else COLORS["accent_hover"], 
@@ -2811,7 +2811,7 @@ class AutoPromptGUI:
     def _ai_generate_workflow(self, task_override: str = None):
         """Send task to AI and process response into steps"""
         if not self.chatbot.is_ready:
-            self._append_chat("⚠️ AI Chatbot not ready.\n\n", "error")
+            self._append_chat("âš ï¸ AI Chatbot not ready.\n\n", "error")
             return
 
         task = task_override
@@ -2826,13 +2826,13 @@ class AutoPromptGUI:
                 task = user_msgs[-1]
         
         if not task:
-            self._append_chat("⚠️ Please describe the workflow in the chat first.\n\n", "error")
+            self._append_chat("âš ï¸ Please describe the workflow in the chat first.\n\n", "error")
             if not self._chat_panel_visible: self._toggle_chat_panel()
             return
 
         self._chat_input.delete("1.0", tk.END)
         self._append_chat(f"You: Generate workflow for: {task}\n", "user")
-        self._chat_status_var.set("🤔 Generating...")
+        self._chat_status_var.set("ðŸ¤” Generating...")
 
         def handle_generate(reply: str):
             try:
@@ -2889,13 +2889,13 @@ class AutoPromptGUI:
                     # We don't append a message here anymore because 
                     # _on_chat_response (on_response) now always runs first
                     # and adds the bot's reply and the "Load" button.
-                    self._chat_status_var.set("🟢 Ready")
+                    self._chat_status_var.set("ðŸŸ¢ Ready")
                 
                 self.root.after(0, update_ui)
                 
             except Exception as e:
-                self.root.after(0, self._append_chat, f"❌ Failed to parse generated steps: {e}\n  Response preview: {reply[:100]}...\n\n", "error")
-                self.root.after(0, self._chat_status_var.set, "🟢 Ready")
+                self.root.after(0, self._append_chat, f"âŒ Failed to parse generated steps: {e}\n  Response preview: {reply[:100]}...\n\n", "error")
+                self.root.after(0, self._chat_status_var.set, "ðŸŸ¢ Ready")
 
         self.chatbot.generate_workflow_prompts(task, callback=handle_generate)
 
@@ -2909,7 +2909,7 @@ class AutoPromptGUI:
             messagebox.showwarning("Sync Project", "Please select a valid project directory first.")
             return
             
-        self._append_chat("🔍 Scanning project for context (README, TODO, CHANGELOG)...\n", "system")
+        self._append_chat("ðŸ” Scanning project for context (README, TODO, CHANGELOG)...\n", "system")
         
         context_parts = []
         target_files = [
@@ -2929,24 +2929,24 @@ class AutoPromptGUI:
                             context_parts.append(f"--- FILE: {filename} ---\n{content}\n")
                             found_any = True
                 except Exception as e:
-                    self._append_chat(f"⚠️ Error reading {filename}: {e}\n", "error")
+                    self._append_chat(f"âš ï¸ Error reading {filename}: {e}\n", "error")
         
         if found_any:
             full_context = "\n".join(context_parts)
             self.chatbot.set_project_context(full_context)
-            self._append_chat("✅ Project context synced! AI now knows your README, TODO, and CHANGELOG.\n\n", "system")
-            self._chat_status_var.set("🟢 Project Synced")
+            self._append_chat("âœ… Project context synced! AI now knows your README, TODO, and CHANGELOG.\n\n", "system")
+            self._chat_status_var.set("ðŸŸ¢ Project Synced")
         else:
-            self._append_chat("❓ No README, TODO, or CHANGELOG files found in project root.\n\n", "system")
+            self._append_chat("â“ No README, TODO, or CHANGELOG files found in project root.\n\n", "system")
 
     def _ai_refine_prompt(self, index: int = 0):
         """Ask AI to refine a specific step's prompt"""
         if not self.chatbot.is_ready:
-            self._append_chat("⚠️ AI Chatbot not ready.\n\n", "error")
+            self._append_chat("âš ï¸ AI Chatbot not ready.\n\n", "error")
             return
 
         if not self._active_workflow or not (0 <= index < len(self._active_workflow.steps)):
-            self._append_chat("⚠️ Invalid step selected for refinement.\n\n", "error")
+            self._append_chat("âš ï¸ Invalid step selected for refinement.\n\n", "error")
             return
 
         step = self._active_workflow.steps[index]
@@ -2959,8 +2959,8 @@ class AutoPromptGUI:
             def update_ui():
                 self._active_workflow.steps[index].prompt = reply.strip()
                 self._render_steps()
-                self._append_chat(f"🤖 I've updated Step {index+1} in the workflow editor! ✨\n\n", "bot")
-                self._chat_status_var.set("🟢 Ready")
+                self._append_chat(f"ðŸ¤– I've updated Step {index+1} in the workflow editor! âœ¨\n\n", "bot")
+                self._chat_status_var.set("ðŸŸ¢ Ready")
             self.root.after(0, update_ui)
 
         self.chatbot.refine_prompt(step.prompt, callback=handle_refine)
