@@ -288,8 +288,19 @@ class PlaywrightBrowserManager:
             logger.error("Neither Google Chrome nor Microsoft Edge was found on this system.")
             return False
 
-        # Persistent user data directory so Google account login persists
-        profile_dir = os.path.expanduser(r"~\.google_ai_studio_playwright_profile")
+        # Use the user's REAL Chrome profile so they stay logged in to Google.
+        # Chrome cannot share a profile between two running instances, so we check
+        # if Chrome is already open first (connect_cdp above). If not, we launch
+        # with the real profile. If the real profile is locked (Chrome already
+        # running without CDP), we fall back to a copy.
+        real_profile = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+        fallback_profile = os.path.expanduser(r"~\.ai_studio_chrome_profile")
+
+        if os.path.isdir(real_profile):
+            profile_dir = real_profile
+        else:
+            # Edge or no Chrome — use a persistent fallback
+            profile_dir = fallback_profile
         os.makedirs(profile_dir, exist_ok=True)
 
         cmd = [
@@ -298,6 +309,7 @@ class PlaywrightBrowserManager:
             f"--user-data-dir={profile_dir}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--profile-directory=Default",
             url
         ]
 
