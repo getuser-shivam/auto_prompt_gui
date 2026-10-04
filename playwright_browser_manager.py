@@ -341,11 +341,21 @@ class PlaywrightBrowserManager:
     @staticmethod
     def _visible_chat_input(page):
         selectors = (
+            # AI Studio app builder (project edit view)
+            'div[contenteditable="true"][aria-label*="Make changes" i]',
+            'div[contenteditable="true"][aria-label*="ask for anything" i]',
+            'div[contenteditable="true"][placeholder*="Make changes" i]',
+            'div[contenteditable="true"][placeholder*="ask for anything" i]',
+            'ms-prompt-input div[contenteditable="true"]',
+            'ms-autosize-textarea div[contenteditable="true"]',
+            'ms-prompt-input textarea',
+            # Standard textarea selectors
             'textarea[placeholder*="Make changes" i]',
             'textarea[placeholder*="prompt" i]',
             'textarea[placeholder*="ask for anything" i]',
             'textarea[placeholder*="chat" i]',
             'textarea[aria-label*="prompt" i]',
+            # Generic contenteditable
             '[contenteditable="true"][role="textbox"]',
             'div[contenteditable="true"]',
             '.chat-input-textarea',

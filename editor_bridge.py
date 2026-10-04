@@ -1814,17 +1814,17 @@ class EditorBridge:
 
             if not window.Exists(2, 0.3):
                 logger.error("UIA cannot find browser window")
-                return self._web_uia_fallback(prompt)
+                return self._web_uia_fallback(prompt, hwnd)
 
             # 4. Find the DocumentControl (web page content)
             doc = window.DocumentControl(searchDepth=8)
             if not doc.Exists(6, 0.5):
                 logger.warning("UIA couldn't find DocumentControl. Using scoped fallback.")
-                return self._web_uia_fallback(prompt)
+                return self._web_uia_fallback(prompt, hwnd)
 
             doc_rect = doc.BoundingRectangle
             if not doc_rect:
-                return self._web_uia_fallback(prompt)
+                return self._web_uia_fallback(prompt, hwnd)
 
             # 5. Define Chat Screen Boundary (Left pane, ~42% of document width)
             # This strictly isolates the chat pane from the right-side web preview!
@@ -1833,7 +1833,11 @@ class EditorBridge:
             chat_bottom = doc_rect.bottom
             logger.info(f"Chat Screen Bounds: Left={chat_left}, Right={chat_right}, Bottom={chat_bottom}")
 
-            # 6. Locate the EXACT prompt input box inside the Chat Screen
+            # ── STEP 1: Press Escape to dismiss any open dialogs/menus ──
+            self._press_key("escape")
+            time.sleep(0.3)
+
+            # ── STEP 2: Try UIA SetFocus on known input controls ──
             prompt_input_ctrl = None
 
             def find_chat_input(ctrl, depth=0):
@@ -1880,7 +1884,7 @@ class EditorBridge:
                 if bottom_edits:
                     prompt_input_ctrl = max(bottom_edits, key=lambda c: c.BoundingRectangle.bottom if c.BoundingRectangle else 0)
 
-            # 7. Focus and type ONLY in the prompt input
+            # ── STEP 3: Focus the input — prefer UIA SetFocus, fallback keyboard only ──
             win_rect = self._get_window_rect(hwnd)
             win_left = win_rect[0] if win_rect else 0
             win_top = win_rect[1] if win_rect else 0
@@ -1896,8 +1900,8 @@ class EditorBridge:
                     pass
             else:
                 # Keyboard-only fallback: press Escape first to dismiss any open menus,
-                # then Ctrl+Shift+I won't work so we click precisely inside the text area
-                # using the KNOWN safe region (right half of the chat pane, bottom 120px)
+                # then click precisely inside the text area using the KNOWN safe region
+                # (right half of the chat pane, bottom 120px)
                 logger.info("Prompt input not found via UIA. Using keyboard Escape + click fallback.")
                 self._press_key("escape")
                 time.sleep(0.3)
@@ -2000,6 +2004,7 @@ class EditorBridge:
         except Exception as e:
             logger.error(f"Web UIA injection encountered error: {e}, falling back to coordinate submit")
             return self._web_uia_fallback(prompt, hwnd)
+
 
     def _web_uia_fallback(self, prompt: str, hwnd=None) -> str:
         """Robust fallback: focuses chat textarea, pastes, dispatches Enter, Ctrl+Enter, and clicks Send button."""
