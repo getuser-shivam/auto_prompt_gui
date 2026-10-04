@@ -1746,9 +1746,15 @@ class EditorBridge:
 
     def _send_via_web_uia(self, prompt: str, hwnd=None) -> str:
         """
-        Fast and accurate prompt injection into Google AI Studio:
-        Brings window to front, targets the left chat textarea directly, pastes,
-        and submits via Ctrl+Enter and Send button. No laggy recursive tree walking.
+        Reliable prompt injection into Google AI Studio via Windows UI Automation.
+
+        Strategy (in order of preference):
+        1. Use UIA to walk the accessibility tree and find the actual chat input element
+           (contenteditable div in Firefox exposes as EditControl or DocumentControl child)
+        2. If UIA finds an element → click its bounding rect center + paste + Ctrl+Enter
+        3. If UIA can't find it → fall back to safe coordinate zones: try 4 positions in the
+           left chat pane working from bottom-up, clicking each and testing if typing registers
+        No blind Tab/Enter/Space fallback (those caused misclicks on + upload buttons).
         """
         import ctypes
         import time
@@ -1764,7 +1770,7 @@ class EditorBridge:
         # 1. Bring window to front and maximize
         user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
         user32.SetForegroundWindow(hwnd)
-        time.sleep(0.15)
+        time.sleep(0.2)
 
         self._emit_status("typing", "Typing prompt into Google AI Studio...")
 
@@ -1782,7 +1788,7 @@ class EditorBridge:
             elif wait_res and wait_res.startswith("error:"):
                 return f"❌ {wait_res}"
 
-        # 3. Calculate prompt textarea coordinates
+        # 3. Get window geometry
         win_rect = self._get_window_rect(hwnd)
         if not win_rect:
             w_left, w_top, w_width, w_height = 0, 0, 1280, 800
@@ -1791,74 +1797,145 @@ class EditorBridge:
             w_width = win_rect[2] - win_rect[0]
             w_height = win_rect[3] - win_rect[1]
 
-        # Google AI Studio layout:
-        # Left chat pane: ~44% of window width
-        chat_left = w_left
-        chat_right = w_left + int(w_width * 0.44)
-        chat_bottom = w_top + w_height
-
-        # Textarea is centered in left chat pane, ~110px above window bottom
-        # (well clear of the toolbar buttons at bottom - 40px)
-        click_x = chat_left + int((chat_right - chat_left) * 0.45)
-        click_y = chat_bottom - 110
-
-        # Try fast UIA element lookup for prompt box if readily available
+        # 4. Deep UIA scan for the prompt input area
+        # In Firefox, the Google AI Studio contenteditable div is exposed as an
+        # EditControl or a DocumentControl descendant with specific names.
+        input_rect = None
         try:
             import uiautomation as auto
+            auto.SetGlobalSearchTimeout(0.3)
             win_ctrl = auto.ControlFromHandle(hwnd)
-            if win_ctrl and win_ctrl.Exists(0.2, 0.05):
-                doc = win_ctrl.DocumentControl(searchDepth=4)
-                if doc and doc.Exists(0.2, 0.05):
-                    # Check for prompt input box
-                    for kw in ["make changes", "ask for anything", "prompt"]:
-                        cand = doc.Control(searchDepth=6, Name=kw)
-                        if cand and cand.Exists(0.1, 0.05):
-                            cr = cand.BoundingRectangle
-                            if cr and cr.width > 100:
-                                click_x = cr.left + int(cr.width * 0.45)
-                                click_y = cr.top + int(cr.height * 0.45)
-                                break
-        except Exception:
-            pass
+            if win_ctrl and win_ctrl.Exists(0.3, 0.05):
+                # Keywords that identify the AI Studio chat input in different views
+                prompt_keywords = [
+                    "make changes", "ask for anything", "prompt", "message",
+                    "type a message", "send a message", "chat", "input"
+                ]
 
-        # Dismiss any leftover menu popup / modal
+                def _scan_for_input(ctrl, max_depth=12):
+                    """BFS over UIA tree looking for an editable input matching prompt keywords."""
+                    from collections import deque
+                    queue = deque([(ctrl, 0)])
+                    best = None
+                    while queue:
+                        node, depth = queue.popleft()
+                        if depth > max_depth:
+                            continue
+                        try:
+                            ctrl_type = node.ControlTypeName
+                            name = (node.Name or "").lower()
+                            is_edit = ctrl_type in ("EditControl", "DocumentControl")
+                            # Check if it's a visible edit-like element with prompt keywords
+                            if is_edit:
+                                try:
+                                    r = node.BoundingRectangle
+                                    if r and r.width > 100 and r.height > 20:
+                                        if any(kw in name for kw in prompt_keywords):
+                                            best = r
+                                            return best  # Exact match, stop
+                                        elif not best:
+                                            # Accept any sufficiently large edit in left pane
+                                            if r.left < w_left + w_width * 0.55:
+                                                best = r
+                                except Exception:
+                                    pass
+                            # Recurse into children
+                            try:
+                                children = node.GetChildren()
+                                for child in children:
+                                    queue.append((child, depth + 1))
+                            except Exception:
+                                pass
+                        except Exception:
+                            continue
+                    return best
+
+                input_rect = _scan_for_input(win_ctrl)
+                if input_rect:
+                    logger.info(f"UIA found prompt input element at rect: ({input_rect.left},{input_rect.top},{input_rect.width}x{input_rect.height})")
+        except Exception as e:
+            logger.debug(f"UIA tree scan error: {e}")
+
+        # 5. Compute click target
+        if input_rect and input_rect.width > 100:
+            # Hit the center of the actual element found in the tree
+            click_x = input_rect.left + int(input_rect.width * 0.45)
+            click_y = input_rect.top + int(input_rect.height * 0.5)
+            logger.info(f"Using UIA element coords: ({click_x}, {click_y})")
+        else:
+            # Fallback: try multiple coordinate zones in the left chat pane
+            # AI Studio App Builder: left ~44% pane, textarea near bottom
+            # Try 4 positions from bottom-up (110px, 140px, 170px, 200px above bottom)
+            chat_pane_x = w_left + int(w_width * 0.22)  # Center of left 44% pane
+            candidate_ys = [
+                w_top + w_height - 110,
+                w_top + w_height - 140,
+                w_top + w_height - 170,
+                w_top + w_height - 200,
+            ]
+            click_x = chat_pane_x
+            click_y = candidate_ys[0]
+            logger.info(f"No UIA element found. Using coordinate fallback: ({click_x}, {click_y})")
+
+        # 6. Dismiss any popup/modal
         self._press_key("escape")
-        time.sleep(0.08)
+        time.sleep(0.1)
 
-        # 4. Click squarely into prompt textarea
-        logger.info(f"Targeting prompt input area at ({click_x}, {click_y})")
+        # 7. Click the prompt area
+        logger.info(f"Clicking prompt input at ({click_x}, {click_y})")
         pyautogui.click(click_x, click_y)
-        time.sleep(0.12)
+        time.sleep(0.15)
 
-        # 5. Clear existing text and paste prompt
+        # 8. Clear existing text and paste prompt
         self._press_hotkey("ctrl+a")
-        time.sleep(0.04)
+        time.sleep(0.05)
         self._press_key("backspace")
-        time.sleep(0.04)
+        time.sleep(0.05)
 
         self._clipboard_set(prompt)
-        time.sleep(0.08)
+        time.sleep(0.1)
         self._press_hotkey("ctrl+v")
-        time.sleep(0.12)
+        time.sleep(0.15)
 
-        # Trigger reactive framework change
+        # Trigger reactive framework change event
         self._press_key("space")
         time.sleep(0.03)
         self._press_key("backspace")
         time.sleep(0.08)
 
-        # 6. Submit via Ctrl+Enter (built-in native shortcut for AI Studio)
+        # 9. Submit via Ctrl+Enter
         logger.info("Submitting via Ctrl+Enter...")
         self._press_hotkey("ctrl+enter")
-        time.sleep(0.2)
+        time.sleep(0.25)
 
-        # 7. Also click the Send button (bottom right of the chat pane)
-        send_x = chat_right - 40
-        send_y = chat_bottom - 45
-        logger.info(f"Clicking Send button at ({send_x}, {send_y})...")
-        pyautogui.click(send_x, send_y)
-        time.sleep(0.2)
+        # 10. Also click the Send button (↑ arrow) located bottom-right of left chat pane
+        # Use UIA to find it precisely, else compute from geometry
+        send_clicked = False
+        try:
+            import uiautomation as auto
+            win_ctrl = auto.ControlFromHandle(hwnd)
+            if win_ctrl and win_ctrl.Exists(0.2, 0.05):
+                for btn_label in ["Send", "Send prompt", "arrow_upward", "Submit"]:
+                    btn = win_ctrl.ButtonControl(searchDepth=10, Name=btn_label)
+                    if btn and btn.Exists(0.2, 0.05):
+                        r = btn.BoundingRectangle
+                        if r and r.width > 10:
+                            pyautogui.click(r.left + r.width // 2, r.top + r.height // 2)
+                            send_clicked = True
+                            logger.info(f"Clicked Send button via UIA at ({r.left + r.width//2}, {r.top + r.height//2})")
+                            break
+        except Exception:
+            pass
 
+        if not send_clicked:
+            # Coordinate fallback for send button: bottom-right of left chat pane
+            chat_right = w_left + int(w_width * 0.44)
+            send_x = chat_right - 40
+            send_y = w_top + w_height - 45
+            logger.info(f"Clicking Send button (coord fallback) at ({send_x}, {send_y})")
+            pyautogui.click(send_x, send_y)
+
+        time.sleep(0.2)
         return f"✅ Prompt injected and submitted into Google AI Studio ({len(prompt)} chars)"
 
 

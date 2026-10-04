@@ -257,10 +257,28 @@ class PlaywrightBrowserManager:
             logger.debug(f"connect_cdp error: {e}")
             return False
 
+    @staticmethod
+    def kill_chrome_processes(exe_name: str = "chrome.exe") -> int:
+        """Kill all running Chrome (or msedge) processes. Returns the number of processes killed."""
+        try:
+            result = subprocess.run(
+                ["taskkill", "/F", "/IM", exe_name],
+                capture_output=True, text=True, timeout=10
+            )
+            killed = result.stdout.count("SUCCESS")
+            if killed:
+                logger.info(f"Killed {killed} {exe_name} process(es) to free the user profile for CDP relaunch.")
+                time.sleep(1.5)  # Wait for profile lock to be released
+            return killed
+        except Exception as e:
+            logger.debug(f"kill_chrome_processes({exe_name}): {e}")
+            return 0
+
     def launch_ai_studio_browser(self, url: str = "https://aistudio.google.com/") -> bool:
         """
         Launch Google Chrome with remote debugging enabled and the user's persistent profile.
         If Chrome is already open with CDP, attaches to it immediately.
+        If Chrome is open WITHOUT CDP (user's regular session), kills it first then relaunches.
         """
         # 1. Try connecting first if already running with CDP
         if self.connect_cdp():
@@ -298,18 +316,26 @@ class PlaywrightBrowserManager:
             return False
 
         # Use the user's REAL Chrome profile so they stay logged in to Google.
-        # Chrome cannot share a profile between two running instances, so we check
-        # if Chrome is already open first (connect_cdp above). If not, we launch
-        # with the real profile. If the real profile is locked (Chrome already
-        # running without CDP), we fall back to a copy.
+        # Chrome cannot share a profile between two running instances.
+        # Since connect_cdp() above failed, Chrome must be running WITHOUT CDP.
+        # We MUST kill it first so the profile lock is released, then relaunch with CDP.
         real_profile = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
         fallback_profile = os.path.expanduser(r"~\.ai_studio_chrome_profile")
+        is_edge = "msedge.exe" in exe.lower()
 
-        if os.path.isdir(real_profile):
+        if os.path.isdir(real_profile) and not is_edge:
             profile_dir = real_profile
+            # Kill Chrome so it releases its lock on the real profile
+            killed = self.kill_chrome_processes("chrome.exe")
+            if killed:
+                logger.info(f"Killed {killed} Chrome instance(s) to allow CDP relaunch with real profile.")
+            else:
+                logger.info("No running Chrome detected — launching fresh with CDP.")
         else:
-            # Edge or no Chrome — use a persistent fallback
+            # Edge or no Chrome installation — use persistent fallback (no need to kill)
             profile_dir = fallback_profile
+            if is_edge:
+                self.kill_chrome_processes("msedge.exe")
         os.makedirs(profile_dir, exist_ok=True)
 
         cmd = [
@@ -326,13 +352,13 @@ class PlaywrightBrowserManager:
         try:
             proc = subprocess.Popen(cmd)
             self._browser_proc = proc
-            # Poll for CDP availability
-            for _ in range(15):
+            # Poll for CDP availability (up to 20s)
+            for attempt in range(20):
                 time.sleep(1.0)
                 if self.connect_cdp():
-                    logger.info("Successfully connected to newly launched automated browser!")
+                    logger.info(f"Successfully connected to newly launched automated browser after {attempt+1}s!")
                     return True
-            logger.warning("Browser launched, but CDP connection timed out.")
+            logger.warning("Browser launched, but CDP connection timed out after 20s.")
             return False
         except Exception as e:
             logger.error(f"Failed to launch automated browser: {e}")
