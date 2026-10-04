@@ -1518,20 +1518,27 @@ class EditorBridge:
         self._model_rotation_count = getattr(self, "_model_rotation_count", 0) + 1
         model_selected = False
 
-        # Try selecting from UIA dropdown options if open
+        # Try selecting from UIA dropdown options if open (in ascending preference order)
         try:
             import uiautomation as auto
             root = auto.GetRootControl()
+            # Order: Google Pro -> Gemini 3.8 -> Gemini 3.7 -> Gemini 3.1 -> 2.5 -> 2.0 -> etc.
             available_targets = [
-                "Gemini 3 Pro", "Gemini 3 Flash", "Gemini 2.5 Pro", "Gemini 2.5 Flash",
-                "Gemini 2.0 Flash", "Gemini Flash Lite", "Gemini 1.5 Pro", "Gemini 1.5 Flash",
+                "Gemini 3.1 Pro", "Gemini 3 Pro", "Gemini 2.5 Pro", "Gemini 1.5 Pro", "Gemini Pro",
+                "Gemini 3.8 Flash", "Gemini 3.8",
+                "Gemini 3.7 Flash", "Gemini 3.7",
+                "Gemini 3.1 Flash", "Gemini 3.1 Flash Lite", "Gemini 3 Flash",
+                "Gemini 2.5 Flash", "Gemini 2.0 Flash", "Gemini Flash Lite", "Gemini 1.5 Flash",
             ]
-            for target_name in available_targets:
+            # Offset targets based on rotation count so we cycle through them in order
+            rotation_offset = (self._model_rotation_count - 1) % len(available_targets)
+            ordered_targets = available_targets[rotation_offset:] + available_targets[:rotation_offset]
+            for target_name in ordered_targets:
                 opt = root.Control(searchDepth=10, Name=target_name)
                 if opt.Exists(0.2, 0.05):
                     opt.Click(waitTime=0.2)
                     model_selected = True
-                    logger.info(f"UIA selected available model: {target_name}")
+                    logger.info(f"UIA selected preferred model: {target_name}")
                     break
         except Exception:
             pass

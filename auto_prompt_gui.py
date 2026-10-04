@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Auto-Prompt Workflow GUI
 Chains prompts sequentially and sends them to AI coding editors
@@ -175,6 +175,7 @@ class AutoPromptGUI:
         self._connection_monitor_id = None
         self._all_workflows = dict(self.engine.builtin_workflows)
         self.hidden_workflows: List[str] = []
+        self.pinned_workflows: List[str] = ["iPortfolio"]
         self._step_frames = []
         self._editor_options = list(self.bridge.supported_editors)
         self._editor_display_by_key = {
@@ -1021,12 +1022,34 @@ class AutoPromptGUI:
         else:
             self._unhide_btn.pack_forget()
 
-        for name, wf in self._all_workflows.items():
-            if name in self.hidden_workflows:
-                continue
+        # Sort workflows so current & running & pinned are at the top
+        def _wf_sort_key(item):
+            name, wf = item
+            is_active = bool(self._active_workflow and self._active_workflow.name == name)
+            engine = self.engines.get(name)
+            is_running = bool(engine and engine.is_running)
+            is_pinned = name in getattr(self, "pinned_workflows", [])
+            if is_running and is_active:
+                return (0, name.lower())
+            elif is_running:
+                return (1, name.lower())
+            elif is_active:
+                return (2, name.lower())
+            elif is_pinned:
+                return (3, name.lower())
+            return (4, name.lower())
+
+        visible_wfs = [
+            (name, wf) for name, wf in self._all_workflows.items()
+            if name not in self.hidden_workflows
+        ]
+        visible_wfs.sort(key=_wf_sort_key)
+
+        for name, wf in visible_wfs:
             is_active = (self._active_workflow and self._active_workflow.name == name)
             engine = self.engines.get(name)
             is_running = bool(engine and engine.is_running)
+            is_pinned = name in getattr(self, "pinned_workflows", [])
             btn_bg = COLORS["bg_card"] if is_active else COLORS["bg_mid"]
             btn_fg = COLORS["accent"] if is_active else COLORS["text"]
             btn_font = ("Segoe UI", 10, "bold") if is_active else ("Segoe UI", 10)
@@ -1039,7 +1062,19 @@ class AutoPromptGUI:
                 accent_bar = tk.Frame(btn_frame, bg=COLORS["accent"], width=3)
                 accent_bar.pack(side=tk.LEFT, fill=tk.Y)
 
-            icon = "â³" if is_running else ("â–¶" if is_active else "â—‹")
+            # Pin / Unpin button on right
+            pin_btn = tk.Label(
+                btn_frame,
+                text="📌" if is_pinned else "📍",
+                font=("Segoe UI", 9),
+                bg=btn_bg,
+                fg=COLORS["accent"] if is_pinned else COLORS["text_dim"],
+                cursor="hand2",
+            )
+            pin_btn.pack(side=tk.RIGHT, padx=6)
+            pin_btn.bind("<Button-1>", lambda e, n=name: self._toggle_pin_workflow(n))
+
+            icon = "⏳" if is_running else ("▶" if is_active else "○")
             label = tk.Label(
                 btn_frame, text=f"  {icon}  {name}",
                 font=btn_font, bg=btn_bg, fg=btn_fg,
@@ -1048,7 +1083,7 @@ class AutoPromptGUI:
             label.pack(fill=tk.X, padx=4)
 
             desc = tk.Label(
-                btn_frame, text=f"     {len(wf.steps)} steps" + (" Â· RUNNING" if is_running else ""),
+                btn_frame, text=f"     {len(wf.steps)} steps" + (" · RUNNING" if is_running else ""),
                 font=("Segoe UI", 8), bg=btn_bg, fg=COLORS["text_muted"],
                 anchor="w",
             )
@@ -1057,6 +1092,18 @@ class AutoPromptGUI:
             # Click handler
             for widget in (btn_frame, label, desc):
                 widget.bind("<Button-1>", lambda e, n=name: self._select_workflow(n))
+
+    def _toggle_pin_workflow(self, name: str):
+        if not hasattr(self, "pinned_workflows"):
+            self.pinned_workflows = []
+        if name in self.pinned_workflows:
+            self.pinned_workflows.remove(name)
+            self._log(f"Unpinned workflow: {name}", "info")
+        else:
+            self.pinned_workflows.append(name)
+            self._log(f"📌 Pinned workflow: {name} to top", "info")
+        self._populate_workflow_list()
+        self._save_settings()
 
     def _select_workflow(self, name: str):
         if name in self._all_workflows:
@@ -1070,6 +1117,12 @@ class AutoPromptGUI:
                 self._editor_display_var.set(self._editor_display_by_key.get(editor_key, self._editor_display_options[0]))
                 self._mode_var.set(target.get("mode", "auto_interact" if editor_key == "google_ai_studio" else "clipboard"))
                 self._project_var.set(target.get("project_path", str(Path.cwd())))
+                if target.get("browser_url"):
+                    self.bridge.detected_browser_url = target.get("browser_url")
+            elif name == "iPortfolio":
+                iport_url = "https://aistudio.google.com/u/1/apps/c3190ca2-5e09-4827-9b56-bf05b56b8a91?showPreview=true&showAssistant=true"
+                self.bridge.detected_browser_url = iport_url
+                self._project_var.set(iport_url)
             self._on_editor_change()
             self.bridge.mode = self._mode_var.get()
             existing_engine = self.engines.get(name)
@@ -1079,6 +1132,9 @@ class AutoPromptGUI:
                 existing_bridge.mode = self._mode_var.get()
                 if existing_bridge.editor != "google_ai_studio":
                     existing_bridge.project_path = self._project_var.get() or Path.cwd()
+                else:
+                    if target and target.get("browser_url"):
+                        existing_bridge.detected_browser_url = target.get("browser_url")
             self._wf_title_label.config(text=self._active_workflow.name)
             self._wf_desc_label.config(text=self._active_workflow.description)
             self._render_steps()
@@ -1090,11 +1146,18 @@ class AutoPromptGUI:
     def _capture_workflow_target(self, wf_name: str):
         if not wf_name:
             return
-        self._workflow_target_settings[wf_name] = {
-            "editor": self._get_selected_editor_key(),
-            "mode": self._mode_var.get(),
-            "project_path": self._project_var.get(),
-        }
+        entry = self._workflow_target_settings.get(wf_name, {})
+        editor_key = self._get_selected_editor_key()
+        entry["editor"] = editor_key
+        entry["mode"] = self._mode_var.get()
+        entry["project_path"] = self._project_var.get()
+        if editor_key == "google_ai_studio":
+            url = getattr(self.bridge, "detected_browser_url", "")
+            if not url and wf_name == "iPortfolio":
+                url = "https://aistudio.google.com/u/1/apps/c3190ca2-5e09-4827-9b56-bf05b56b8a91?showPreview=true&showAssistant=true"
+            if url:
+                entry["browser_url"] = url
+        self._workflow_target_settings[wf_name] = entry
 
     def _show_unhide_dialog(self):
         if not self.hidden_workflows:
@@ -2004,9 +2067,18 @@ class AutoPromptGUI:
 
     def _open_project_url(self):
         """Open or connect to Google AI Studio with Playwright CDP automation"""
-        url = getattr(self.bridge, "detected_browser_url", "")
+        wf_name = self._active_workflow.name if self._active_workflow else ""
+        target = self._workflow_target_settings.get(wf_name, {})
+        url = target.get("browser_url") or getattr(self._get_bridge(), "detected_browser_url", "") or getattr(self.bridge, "detected_browser_url", "")
         if not url or not url.startswith("http"):
-            url = "https://aistudio.google.com/"
+            proj_val = self._project_var.get().strip()
+            if proj_val.startswith("http://") or proj_val.startswith("https://"):
+                url = proj_val
+        if not url or not url.startswith("http"):
+            if wf_name == "iPortfolio":
+                url = "https://aistudio.google.com/u/1/apps/c3190ca2-5e09-4827-9b56-bf05b56b8a91?showPreview=true&showAssistant=true"
+            else:
+                url = "https://aistudio.google.com/"
 
         if get_playwright_manager:
             pw = get_playwright_manager(self._get_bridge().browser_session_id)
@@ -2471,6 +2543,7 @@ class AutoPromptGUI:
                 "auto_rotate_model": self._auto_rotate_var.get(),
                 "auto_republish_test": self._auto_republish_var.get(),
                 "hidden_workflows": self.hidden_workflows,
+                "pinned_workflows": getattr(self, "pinned_workflows", ["iPortfolio"]),
                 "workflow_targets": self._workflow_target_settings,
             }
             with open(self._get_settings_path(), "w", encoding="utf-8") as f:
@@ -2552,6 +2625,8 @@ class AutoPromptGUI:
                     self.chatbot.set_api_key(settings["api_key"])
                 if "hidden_workflows" in settings:
                     self.hidden_workflows = settings["hidden_workflows"]
+                if "pinned_workflows" in settings and isinstance(settings["pinned_workflows"], list):
+                    self.pinned_workflows = settings["pinned_workflows"]
                 
                 status = self.chatbot.status_text
                 if hasattr(self, "_chat_status_var"): self._chat_status_var.set(status)

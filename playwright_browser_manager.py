@@ -269,8 +269,17 @@ class PlaywrightBrowserManager:
                     page = w.active_page
                     if not page:
                         return False
-                    if url and url.rstrip("/") != "https://aistudio.google.com" and page.url.rstrip("/") == "https://aistudio.google.com":
-                        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    current_url = (page.url or "").lower()
+                    target_url = (url or "").strip()
+                    if target_url and "aistudio.google.com" in target_url.lower():
+                        target_base = target_url.split("?")[0].rstrip("/")
+                        current_base = current_url.split("?")[0].rstrip("/")
+                        if target_base != current_base or ("apps/" in target_url and "apps/" not in current_url):
+                            logger.info(f"Navigating connected AI Studio tab to project URL: {target_url}")
+                            try:
+                                page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+                            except Exception as nav_e:
+                                logger.warning(f"Navigation to {target_url} failed: {nav_e}")
                     return "aistudio.google.com" in (page.url or "").lower()
                 return bool(self._execute(_navigate_existing, timeout=35.0))
             except Exception:
@@ -939,6 +948,42 @@ class PlaywrightBrowserManager:
                         continue
                 if len(options) < 2:
                     return False
+
+                # Sort available model options according to user preference order:
+                # Google Pro -> Gemini 3.8 -> Gemini 3.7 -> Gemini 3.1 -> 2.5 -> 2.0 -> etc.
+                def _model_preference_rank(model_name: str) -> tuple:
+                    n = model_name.casefold()
+                    if "pro" in n:
+                        if "3.1" in n or "3" in n:
+                            tier = 1  # Gemini 3.1 Pro / 3 Pro
+                        elif "2.5" in n:
+                            tier = 2  # Gemini 2.5 Pro
+                        elif "1.5" in n:
+                            tier = 3  # Gemini 1.5 Pro
+                        else:
+                            tier = 4  # Generic Pro
+                    elif "3.8" in n:
+                        tier = 10     # Gemini 3.8
+                    elif "3.7" in n:
+                        tier = 20     # Gemini 3.7
+                    elif "3.1" in n or "3" in n:
+                        if "flash lite" in n or "lite" in n:
+                            tier = 35 # Gemini 3.1 Flash Lite
+                        else:
+                            tier = 30 # Gemini 3.1 Flash
+                    elif "2.5" in n:
+                        tier = 40     # Gemini 2.5 Flash
+                    elif "2.0" in n or "2" in n:
+                        tier = 50     # Gemini 2.0 Flash
+                    elif "1.5" in n:
+                        tier = 60     # Gemini 1.5 Flash
+                    elif "lite" in n:
+                        tier = 70
+                    else:
+                        tier = 80
+                    return (tier, n)
+
+                options.sort(key=lambda item: _model_preference_rank(item[0]))
 
                 current_index = next((i for i, (name, _, selected) in enumerate(options) if selected), -1)
                 if current_index < 0 and before:
