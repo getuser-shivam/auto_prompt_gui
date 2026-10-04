@@ -152,6 +152,8 @@ class AutoPromptGUI:
         self.engine = WorkflowEngine()
         self.engines = {}
         self.bridges = {}
+        self._workflow_target_settings = {}
+        self._overlays = {}
         self.chatbot = AIChatbot()
         self._overlay: Optional[StepOverlay] = None
 
@@ -194,7 +196,7 @@ class AutoPromptGUI:
         self._auto_pilot_var = tk.BooleanVar(value=False)
         self._context_agent_var = tk.BooleanVar(value=False)
         self._use_ocr_var = tk.BooleanVar(value=True)
-        self._refresh_step_var = tk.BooleanVar(value=True)
+        self._refresh_step_var = tk.BooleanVar(value=False)
         self._auto_rotate_var = tk.BooleanVar(value=True)
         self._auto_republish_var = tk.BooleanVar(value=True)
         self._delay_var = tk.StringVar(value="3.0")
@@ -522,11 +524,18 @@ class AutoPromptGUI:
         )
 
         self._republish_btn = tk.Button(
-            self._target_frame, text="🚀 Republish & Test", font=("Segoe UI", 8, "bold"),
+            self._target_frame, text="🚀 Publish / Republish", font=("Segoe UI", 8, "bold"),
             bg=COLORS["green_dim"], fg=COLORS["green"],
             activebackground=COLORS["green"], activeforeground="#ffffff",
             relief="flat", bd=0, padx=8,
             command=self._on_manual_republish,
+        )
+
+        self._browser_usage_var = tk.StringVar(value="Model: — | AI Studio usage: —")
+        self._browser_usage_label = tk.Label(
+            self._target_frame, textvariable=self._browser_usage_var,
+            font=("Segoe UI", 8), bg=COLORS["bg_card"], fg=COLORS["text_dim"],
+            anchor="e",
         )
 
         # Editor selector
@@ -773,7 +782,7 @@ class AutoPromptGUI:
         )
 
         self._auto_republish_cb = tk.Checkbutton(
-            loop_row, text="🚀 Auto-Republish & Test", variable=self._auto_republish_var,
+            loop_row, text="🚀 Auto-Publish on Completion", variable=self._auto_republish_var,
             bg=COLORS["bg_mid"], fg=COLORS["green"],
             selectcolor=COLORS["bg_dark"], activebackground=COLORS["bg_mid"],
             font=("Segoe UI", 8, "bold"),
@@ -1016,6 +1025,8 @@ class AutoPromptGUI:
             if name in self.hidden_workflows:
                 continue
             is_active = (self._active_workflow and self._active_workflow.name == name)
+            engine = self.engines.get(name)
+            is_running = bool(engine and engine.is_running)
             btn_bg = COLORS["bg_card"] if is_active else COLORS["bg_mid"]
             btn_fg = COLORS["accent"] if is_active else COLORS["text"]
             btn_font = ("Segoe UI", 10, "bold") if is_active else ("Segoe UI", 10)
@@ -1028,7 +1039,7 @@ class AutoPromptGUI:
                 accent_bar = tk.Frame(btn_frame, bg=COLORS["accent"], width=3)
                 accent_bar.pack(side=tk.LEFT, fill=tk.Y)
 
-            icon = "▶" if is_active else "○"
+            icon = "⏳" if is_running else ("▶" if is_active else "○")
             label = tk.Label(
                 btn_frame, text=f"  {icon}  {name}",
                 font=btn_font, bg=btn_bg, fg=btn_fg,
@@ -1037,7 +1048,7 @@ class AutoPromptGUI:
             label.pack(fill=tk.X, padx=4)
 
             desc = tk.Label(
-                btn_frame, text=f"     {len(wf.steps)} steps",
+                btn_frame, text=f"     {len(wf.steps)} steps" + (" · RUNNING" if is_running else ""),
                 font=("Segoe UI", 8), bg=btn_bg, fg=COLORS["text_muted"],
                 anchor="w",
             )
@@ -1049,11 +1060,41 @@ class AutoPromptGUI:
 
     def _select_workflow(self, name: str):
         if name in self._all_workflows:
+            previous_name = self._active_workflow.name if self._active_workflow else None
+            if previous_name:
+                self._capture_workflow_target(previous_name)
             self._active_workflow = self._all_workflows[name]
+            target = self._workflow_target_settings.get(name)
+            if target:
+                editor_key = target.get("editor", "antigravity")
+                self._editor_display_var.set(self._editor_display_by_key.get(editor_key, self._editor_display_options[0]))
+                self._mode_var.set(target.get("mode", "auto_interact" if editor_key == "google_ai_studio" else "clipboard"))
+                self._project_var.set(target.get("project_path", str(Path.cwd())))
+            self._on_editor_change()
+            self.bridge.mode = self._mode_var.get()
+            existing_engine = self.engines.get(name)
+            existing_bridge = self.bridges.get(name)
+            if existing_bridge and not (existing_engine and existing_engine.is_running):
+                existing_bridge.editor = self._get_selected_editor_key()
+                existing_bridge.mode = self._mode_var.get()
+                if existing_bridge.editor != "google_ai_studio":
+                    existing_bridge.project_path = self._project_var.get() or Path.cwd()
             self._wf_title_label.config(text=self._active_workflow.name)
             self._wf_desc_label.config(text=self._active_workflow.description)
             self._render_steps()
             self._populate_workflow_list()
+            self._overlay = self._overlays.get(name)
+            self._update_ui_state()
+            self._save_settings()
+
+    def _capture_workflow_target(self, wf_name: str):
+        if not wf_name:
+            return
+        self._workflow_target_settings[wf_name] = {
+            "editor": self._get_selected_editor_key(),
+            "mode": self._mode_var.get(),
+            "project_path": self._project_var.get(),
+        }
 
     def _show_unhide_dialog(self):
         if not self.hidden_workflows:
@@ -1504,11 +1545,32 @@ class AutoPromptGUI:
             if not self._active_workflow: return self.bridge
             wf_name = self._active_workflow.name
         if wf_name not in self.bridges:
-            b = __import__("editor_bridge").EditorBridge(self._editor_var.get())
+            target = self._workflow_target_settings.get(wf_name, {})
+            editor_key = target.get("editor", self._get_selected_editor_key())
+            project_path = target.get("project_path", self._project_var.get() if hasattr(self, "_project_var") else None)
+            b = EditorBridge(
+                project_path=project_path,
+                editor=editor_key,
+                browser_session_id=f"workflow:{wf_name}",
+            )
+            b.mode = target.get("mode", self._mode_var.get() if hasattr(self, "_mode_var") else "clipboard")
+            b.on_status_change = lambda status, detail, name=wf_name: self._on_workflow_bridge_status(name, status, detail)
             self.bridges[wf_name] = b
         return self.bridges[wf_name]
 
     def _run_workflow(self):
+        try:
+            self._start_selected_workflow()
+        except Exception as e:
+            logger.exception("Workflow could not be started")
+            self._log(f"❌ Workflow start failed: {type(e).__name__}: {e}", "error")
+            self._status_var.set("Could not start workflow")
+            if self._active_workflow:
+                self._destroy_workflow_overlay(self._active_workflow.name)
+            self._update_ui_state()
+            messagebox.showerror("Workflow error", f"The workflow could not start:\n\n{e}")
+
+    def _start_selected_workflow(self):
         if not self._active_workflow:
             messagebox.showinfo("Info", "No workflow selected.")
             return
@@ -1518,17 +1580,25 @@ class AutoPromptGUI:
             return
 
         # Create Overlay (if enabled)
-        if self._overlay is not None:
-            self._overlay.destroy()
-            self._overlay = None
-            
+        wf_name = self._active_workflow.name
+        old_overlay = self._overlays.pop(wf_name, None)
+        if old_overlay is not None:
+            old_overlay.destroy()
+        self._overlay = None
         if self._enable_overlay_var.get():
-            self._overlay = StepOverlay(self.root, self._stop_workflow)
+            overlay = StepOverlay(self.root, lambda name=wf_name: self._stop_workflow(name))
+            self._overlays[wf_name] = overlay
+            self._overlay = overlay
 
         # Update bridge settings
         editor_key = self._get_selected_editor_key()
         self._get_bridge().editor = editor_key
         self._get_bridge().mode = self._mode_var.get()
+        self._get_bridge().refresh_before_step = self._refresh_step_var.get()
+        self._get_bridge().auto_rotate_model = self._auto_rotate_var.get()
+        self._get_bridge().auto_republish_test = self._auto_republish_var.get()
+        self._get_bridge().use_ocr_click = self._use_ocr_var.get()
+        self._get_bridge().use_autopilot_context = self._context_agent_var.get()
 
         if editor_key == "google_ai_studio":
             # Google AI Studio is cloud/browser-based; NO local project folder needed or checked!
@@ -1553,6 +1623,9 @@ class AutoPromptGUI:
                 # Special Case: Clipboard target + Auto-Interaction = Internal AI
                 if not self.chatbot.is_ready:
                     messagebox.showerror("Error", "No-Cost AI Chatbot not ready.")
+                    self._destroy_workflow_overlay(wf_name)
+                    self._status_var.set("Ready")
+                    self._update_ui_state()
                     return
                 
                 self._get_engine().send_and_wait_fn = self.chatbot.send_message_blocking
@@ -1564,11 +1637,11 @@ class AutoPromptGUI:
                 # Standard Case: External Editor + Auto-Interaction
                 if editor_key == "google_ai_studio" and get_playwright_manager:
                     try:
-                        pw = get_playwright_manager()
+                        pw = get_playwright_manager(self._get_bridge().browser_session_id)
                         if not pw.is_connected():
                             pw.connect_cdp()
                         if pw.is_connected():
-                            self._log("  🟢 Playwright DOM Engine Active: Direct DOM injection & 0ms completion tracking", "success")
+                            self._log("  🟢 Playwright DOM Engine Active: workflow-isolated AI Studio chat tab", "success")
                     except Exception as e:
                         logger.debug(f"Playwright CDP check: {e}")
 
@@ -1579,11 +1652,9 @@ class AutoPromptGUI:
             self._get_engine().send_and_wait_fn = None
             
 
-        # Update button states
-        self._run_btn.config(state="disabled")
-        self._pause_btn.config(state="normal")
-        self._stop_btn.config(state="normal")
-        self._status_var.set("Running...")
+        # Keep Run available so another workflow can start while this one is active.
+        self._update_ui_state()
+        self._status_var.set(f"Running: {self._active_workflow.name}")
         global_delay = None
         if self._global_delay_var.get().strip():
             try:
@@ -1592,7 +1663,7 @@ class AutoPromptGUI:
                 pass
 
         if self._get_bridge().mode == "auto_interact" and global_delay is not None and global_delay > 10.0:
-            self._log(f"⚡ Smart Auto-Interact: AI completion is dynamically detected via OCR/UIA. Bypassing {global_delay}s blind delay to start next step without delay.", "info")
+            self._log(f"⚡ Smart Auto-Interact: AI completion is detected from the editor state. Bypassing the {global_delay}s blind delay.", "info")
             global_delay = 0.0
             self._global_delay_var.set("0")
             self._save_settings()
@@ -1622,6 +1693,10 @@ class AutoPromptGUI:
 
         # Start!
         self._get_engine().start(self._active_workflow)
+        self._capture_workflow_target(self._active_workflow.name)
+        self._save_settings()
+        self._update_ui_state()
+        self._populate_workflow_list()
 
     def _pause_resume(self):
         if self._get_engine().is_paused:
@@ -1635,14 +1710,24 @@ class AutoPromptGUI:
             self._status_var.set("Paused")
             self._log("⏸ Paused", "warning")
 
-    def _stop_workflow(self):
-        self._get_engine().cancel()
-        self._get_bridge().cancel_wait()  # also cancel any active wait-for-completion
-        self._loop_var.set(False)  # stop loop on manual stop
-        self._log("⏹ Cancelling...", "warning")
-        
-        if self._overlay is not None:
-            self._overlay.destroy()
+    def _stop_workflow(self, wf_name=None):
+        if wf_name is None:
+            wf_name = self._active_workflow.name if self._active_workflow else None
+        if not wf_name:
+            return
+        self._get_engine(wf_name).cancel()
+        self._get_bridge(wf_name).cancel_wait()
+        self._log(f"⏹ Cancelling workflow '{wf_name}'...", "warning")
+        self._destroy_workflow_overlay(wf_name)
+
+    def _destroy_workflow_overlay(self, wf_name):
+        overlay = self._overlays.pop(wf_name, None)
+        if overlay is not None:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+        if self._active_workflow and self._active_workflow.name == wf_name:
             self._overlay = None
 
     # ═══════════════════════════════════════════════════
@@ -1656,7 +1741,7 @@ class AutoPromptGUI:
             display_prompt = f"[Context: {context}]\n\n{prompt}"
         
         self.chatbot.add_history("user", prompt) # Keep it simple in history
-        self._append_chat(f"↗ Sending to {self._get_bridge(wf_name).editor_display_name}: {prompt}\n", "system")
+        self.root.after(0, self._append_chat, f"↗ Sending to {self._get_bridge(wf_name).editor_display_name}: {prompt}\n", "system")
         
         # Do the actual interaction
         result = self._get_bridge(wf_name).send_and_wait(prompt)
@@ -1666,22 +1751,37 @@ class AutoPromptGUI:
         return result
 
     def _on_workflow_done(self, workflow, status, wf_name=None):
-        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         """Called when a workflow run completes"""
-        self.root.after(0, self._render_steps)
-        self.root.after(0, self._update_ui_state)
+        is_active = not wf_name or (self._active_workflow and self._active_workflow.name == wf_name)
+        display_name = wf_name or workflow.name
+        if status == "looping":
+            if is_active:
+                self.root.after(0, self._render_steps)
+                self.root.after(0, self._update_ui_state)
+            self.root.after(0, self._populate_workflow_list)
+            self.root.after(0, self._log, f"Workflow '{display_name}' is waiting for its next loop.", "info")
+            return
+
+        if is_active:
+            self.root.after(0, self._render_steps)
+            self.root.after(100, self._update_ui_state)
+        if wf_name:
+            self.root.after(0, self._destroy_workflow_overlay, wf_name)
+        self.root.after(0, self._populate_workflow_list)
+        log_status = "success" if status == "completed" else ("error" if status == "failed" or status.startswith("error") else "warning")
+        self.root.after(0, self._log, f"Workflow '{display_name}' {status}.", log_status)
         
         if status == "completed":
             self.root.after(0, lambda: self._append_chat(f"🏁 Workflow '{workflow.name}' completed successfully!\n\n", "system"))
-            # Auto-Republish & Test for Google AI Studio
-            if self._get_selected_editor_key() == "google_ai_studio" and self._auto_republish_var.get():
-                self.root.after(1000, self._on_manual_republish)
+            bridge = self._get_bridge(wf_name)
+            if bridge.editor == "google_ai_studio" and bridge.auto_republish_test:
+                self.root.after(1000, lambda name=wf_name: self._on_manual_republish(name))
             # Continuous Auto-Pilot Logic
-            if self._auto_pilot_var.get():
+            if is_active and self._auto_pilot_var.get():
                 self.root.after(1500, self._on_autopilot_next)
         elif status == "cancelled":
             self.root.after(0, lambda: self._append_chat(f"⏹️ Workflow '{workflow.name}' was cancelled.\n\n", "system"))
-        elif status.startswith("error"):
+        elif status == "failed" or status.startswith("error"):
             self.root.after(0, lambda: self._append_chat(f"❌ Workflow '{workflow.name}' failed: {status}\n\n", "error"))
 
     def _on_autopilot_next(self):
@@ -1696,6 +1796,8 @@ class AutoPromptGUI:
 
     def _ui_step_start(self, index: int, name: str):
         self._log(f"⏳ Step {index + 1}: {name}", "step")
+        wf_name = self._active_workflow.name if self._active_workflow else None
+        self._overlay = self._overlays.get(wf_name)
         if self._overlay is not None:
             steps_count = len(self._active_workflow.steps)
             self._overlay.update_status(f"Step {index + 1}/{steps_count}: {name}")
@@ -1717,7 +1819,7 @@ class AutoPromptGUI:
         
         # If AI Studio is selected, default mode should be auto_interact (or terminal/browser)
         if editor_key == "google_ai_studio":
-            if self._mode_var.get() == "file_drop":
+            if self._mode_var.get() != "auto_interact":
                 self._mode_var.set("auto_interact")
                 self._on_mode_change()
         self._save_settings()
@@ -1737,21 +1839,28 @@ class AutoPromptGUI:
     def _on_auto_republish_toggle(self):
         enabled = self._auto_republish_var.get()
         self.bridge.auto_republish_test = enabled
-        self._log(f"Auto-republish & test on finish: {'enabled' if enabled else 'disabled'}", "info")
+        self._log(f"Auto-publish on workflow completion: {'enabled' if enabled else 'disabled'}", "info")
         self._save_settings()
 
-    def _on_manual_republish(self):
-        """Trigger project publication and live browser preview test"""
+    def _on_manual_republish(self, wf_name=None):
+        """Publish or republish the selected Google AI Studio app."""
+        bridge = self._get_bridge(wf_name)
+        if bridge.editor != "google_ai_studio":
+            self._log("Select a Google AI Studio workflow before publishing.", "warning")
+            return
+
         def _task():
-            self._log("Initiating project Republish & Test in Google AI Studio...", "info")
-            self._status_var.set("Republishing project...")
-            success = self.bridge.republish_and_test_ai_studio()
+            label = wf_name or (self._active_workflow.name if self._active_workflow else "Google AI Studio")
+            self.root.after(0, self._log, f"[{label}] Publishing or republishing the Google AI Studio app...", "info")
+            success = bridge.republish_and_test_ai_studio()
             if success:
-                self._log("✅ Republish and browser test completed successfully!", "success")
-                self._status_var.set("Live app opened in browser")
+                self.root.after(0, self._log, "✅ Publish/republish completed. AI Studio remains on the publish panel.", "success")
+                if not wf_name or (self._active_workflow and self._active_workflow.name == wf_name):
+                    self.root.after(0, self._status_var.set, "App published")
             else:
-                self._log("⚠️ Republish / Visit did not complete automatically.", "warning")
-                self._status_var.set("Ready")
+                self.root.after(0, self._log, "⚠️ Publish/republish did not confirm deployment completion.", "warning")
+                if not wf_name or (self._active_workflow and self._active_workflow.name == wf_name):
+                    self.root.after(0, self._status_var.set, "Ready")
         threading.Thread(target=_task, daemon=True).start()
 
     def _update_project_ui_labels(self):
@@ -1774,6 +1883,8 @@ class AutoPromptGUI:
                 self._open_url_btn.pack(side=tk.LEFT, padx=(0, 6))
             if hasattr(self, "_republish_btn"):
                 self._republish_btn.pack(side=tk.LEFT, padx=(0, 6))
+            if hasattr(self, "_browser_usage_label"):
+                self._browser_usage_label.pack(side=tk.RIGHT, padx=(6, 8), fill=tk.X, expand=True)
             
             # Show Refresh on Step, Auto-Rotate, Auto-Republish checkboxes for Google AI Studio
             if hasattr(self, "_refresh_step_cb"):
@@ -1793,6 +1904,8 @@ class AutoPromptGUI:
                 self._open_url_btn.pack_forget()
             if hasattr(self, "_republish_btn"):
                 self._republish_btn.pack_forget()
+            if hasattr(self, "_browser_usage_label"):
+                self._browser_usage_label.pack_forget()
             if hasattr(self, "_refresh_step_cb"):
                 self._refresh_step_cb.pack_forget()
             if hasattr(self, "_auto_rotate_cb"):
@@ -1822,13 +1935,23 @@ class AutoPromptGUI:
 
     def _check_connection_loop(self):
         """Check if target browser is connected, using a background thread to avoid freezing the GUI."""
+        bridge = self._get_bridge()
         def _bg_check():
+            state = None
             try:
-                connected = self.bridge.is_connected
+                connected = bridge.is_connected
+                if bridge.editor == "google_ai_studio" and get_playwright_manager:
+                    state = get_playwright_manager(bridge.browser_session_id).get_chat_status()
+                    state["submitted"] = max(state.get("submitted", 0), bridge._ai_studio_prompt_count)
+                    state["quota_switches"] = max(state.get("quota_switches", 0), bridge._ai_studio_quota_switch_count)
+                    state["model"] = state.get("model") or bridge._ai_studio_current_model
+                    state["usage_text"] = state.get("usage_text") or "live quota amount is not exposed in this browser view"
             except Exception:
                 connected = False
+            if state is not None:
+                connected = bool(state.get("connected")) or connected
             # Update UI on the main thread
-            self.root.after(0, lambda: self._update_connection_status(connected))
+            self.root.after(0, lambda: self._update_connection_status(connected, state))
         
         thread = threading.Thread(target=_bg_check, daemon=True)
         thread.start()
@@ -1836,14 +1959,27 @@ class AutoPromptGUI:
         # Schedule next check
         self._connection_monitor_id = self.root.after(3000, self._check_connection_loop)
 
-    def _update_connection_status(self, is_connected: bool):
+    def _update_connection_status(self, is_connected: bool, browser_state=None):
         """Update the connection button text/color on the main thread."""
         if self._get_selected_editor_key() == "google_ai_studio":
             if get_playwright_manager:
                 try:
-                    pw = get_playwright_manager()
+                    bridge = self._get_bridge()
+                    pw = get_playwright_manager(bridge.browser_session_id)
                     if pw.is_connected():
-                        self._open_url_btn.config(text="🟢 Playwright DOM (Active)", fg=COLORS["green"])
+                        state = browser_state or pw.get_chat_status()
+                        if state.get("requires_login"):
+                            self._open_url_btn.config(text="🟡 Google sign-in needed", fg=COLORS["yellow"])
+                        elif state.get("chat_ready"):
+                            self._open_url_btn.config(text="🟢 AI Studio chat detected", fg=COLORS["green"])
+                        else:
+                            self._open_url_btn.config(text="🟡 AI Studio tab · waiting for chat", fg=COLORS["yellow"])
+                        model = state.get("model") or "unknown"
+                        usage = state.get("usage_text") or "quota counter not exposed"
+                        if state.get("usage_remaining") is not None:
+                            usage = f"{state['usage_remaining']} requests remain · {usage}"
+                        counts = f"steps {state.get('submitted', 0)} · switches {state.get('quota_switches', 0)}"
+                        self._browser_usage_var.set(f"Model: {model} | {counts} | {usage}")
                         return
                 except Exception:
                     pass
@@ -1854,8 +1990,17 @@ class AutoPromptGUI:
                     self._open_url_btn.config(text="🔗 AI Studio (OS Window)", fg=COLORS["yellow"])
                 else:
                     self._open_url_btn.config(text="🔗 Connected", fg=COLORS["green"])
+                bridge = self._get_bridge()
+                state = browser_state or {}
+                model = state.get("model") or bridge._ai_studio_current_model or "not exposed to OS control"
+                submitted = max(state.get("submitted", 0), bridge._ai_studio_prompt_count)
+                switches = max(state.get("quota_switches", 0), bridge._ai_studio_quota_switch_count)
+                usage = state.get("usage_text") or "live quota amount unavailable"
+                self._browser_usage_var.set(f"Model: {model} | steps {submitted} · switches {switches} | {usage}")
             else:
                 self._open_url_btn.config(text="🚀 Launch AI Studio (Automated)", fg=COLORS["cyan"])
+                if hasattr(self, "_browser_usage_var"):
+                    self._browser_usage_var.set("Model: not detected | AI Studio usage: waiting for DOM connection")
 
     def _open_project_url(self):
         """Open or connect to Google AI Studio with Playwright CDP automation"""
@@ -1864,7 +2009,7 @@ class AutoPromptGUI:
             url = "https://aistudio.google.com/"
 
         if get_playwright_manager:
-            pw = get_playwright_manager()
+            pw = get_playwright_manager(self._get_bridge().browser_session_id)
             self._log(f"Launching/Connecting to automated Google AI Studio browser ({url})...", "info")
             def _bg_launch():
                 connected = pw.launch_ai_studio_browser(url)
@@ -1918,7 +2063,9 @@ class AutoPromptGUI:
         self._render_steps()
 
     def _on_step_error(self, index, step, error, wf_name=None):
-        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
+        if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name):
+            self.root.after(0, self._log, f"❌ [{wf_name}] Step {index + 1} failed: {step.name} — {error}", "error")
+            return
         self.root.after(0, self._ui_step_error, index, step.name, error)
 
     def _ui_step_error(self, index: int, name: str, error: str):
@@ -1941,33 +2088,45 @@ class AutoPromptGUI:
     def _on_step_failure_recovery(self, index, step, error, wf_name=None):
         if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
         """Recovery hook called before retrying a failed step"""
-        if self._get_selected_editor_key() == "google_ai_studio":
+        bridge = self._get_bridge(wf_name)
+        if bridge.editor == "google_ai_studio":
             err_lower = error.lower()
             if any(k in err_lower for k in ["quota", "exhausted", "rate limit", "overloaded", "resource has been exhausted", "try again later"]):
-                self._log("🔀 Quota exhaustion detected during recovery! Auto-switching to next free model...", "warning")
+                self._log("🔀 Quota exhaustion detected during recovery! Switching to another available model...", "warning")
                 try:
-                    self.bridge.rotate_google_ai_studio_model()
+                    bridge.rotate_google_ai_studio_model()
                 except Exception as e:
-                    print(f"Recovery rotate error: {e}")
+                    self._log(f"Recovery model switch failed: {e}", "error")
             elif any(k in err_lower for k in ["unexpected error", "reload", "finish what you", "disconnected", "timed out"]):
-                self._log("🔄 Session error detected: Reloading Google AI Studio tab for clean retry...", "info")
-                try:
-                    self.bridge.refresh_google_ai_studio()
-                except Exception as e:
-                    print(f"Recovery refresh error: {e}")
+                self._log("⚠️ AI Studio did not finish cleanly. Keeping the current page in place for the retry.", "warning")
 
     def _update_ui_state(self):
-        """Helper to reset UI elements after workflow completion/cancellation."""
-        self._run_btn.config(state="normal")
-        self._pause_btn.config(state="disabled", text="⏸ Pause")
-        self._stop_btn.config(state="disabled")
-        self._progress_var.set(0)
-        self._status_var.set("Ready")
-        self._ai_status_var.set("")
+        """Show controls for the selected workflow while leaving other runs independent."""
+        wf_name = self._active_workflow.name if self._active_workflow else None
+        engine = self._get_engine(wf_name)
+        running = engine.is_running
+        self._run_btn.config(state="disabled" if running else "normal")
+        self._pause_btn.config(state="normal" if running else "disabled", text="▶ Resume" if engine.is_paused else "⏸ Pause")
+        self._stop_btn.config(state="normal" if running else "disabled")
+        if running:
+            self._status_var.set(f"{'Paused' if engine.is_paused else 'Running'}: {wf_name}")
+            if self._active_workflow and self._active_workflow.steps:
+                current = max(0, engine.current_step_index)
+                self._progress_var.set((current / len(self._active_workflow.steps)) * 100)
+        else:
+            self._progress_var.set(0)
+            self._status_var.set("Ready")
+            self._ai_status_var.set("")
         
-        if self._overlay is not None:
-            self._overlay.destroy()
-            self._overlay = None
+    def _on_workflow_bridge_status(self, wf_name: str, status: str, detail: str):
+        self.root.after(0, self._ui_workflow_bridge_status, wf_name, status, detail)
+
+    def _ui_workflow_bridge_status(self, wf_name: str, status: str, detail: str):
+        is_active = self._active_workflow and self._active_workflow.name == wf_name
+        if is_active:
+            self._ui_bridge_status(status, detail)
+        if status in ("error", "warning"):
+            self._log(f"[{wf_name}] {detail}", status)
 
     def _on_progress(self, current, total, percent, wf_name=None):
         if wf_name and (not self._active_workflow or self._active_workflow.name != wf_name): return
@@ -2290,6 +2449,8 @@ class AutoPromptGUI:
     def _save_settings(self):
         """Save GUI presets to JSON file"""
         try:
+            if self._active_workflow:
+                self._capture_workflow_target(self._active_workflow.name)
             settings = {
                 "project_path": self._project_var.get(),
                 "editor": self._get_selected_editor_key(),
@@ -2305,10 +2466,12 @@ class AutoPromptGUI:
                 "enable_overlay": self._enable_overlay_var.get(),
                 "use_ocr_click": self._use_ocr_var.get(),
                 "context_agent": self._context_agent_var.get(),
+                "settings_version": 2,
                 "refresh_before_step": self._refresh_step_var.get(),
                 "auto_rotate_model": self._auto_rotate_var.get(),
                 "auto_republish_test": self._auto_republish_var.get(),
                 "hidden_workflows": self.hidden_workflows,
+                "workflow_targets": self._workflow_target_settings,
             }
             with open(self._get_settings_path(), "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2)
@@ -2323,6 +2486,11 @@ class AutoPromptGUI:
             try:
                 with open(spath, "r", encoding="utf-8") as f:
                     settings = json.load(f)
+                targets = settings.get("workflow_targets", {})
+                if isinstance(targets, dict):
+                    self._workflow_target_settings = {
+                        str(name): value for name, value in targets.items() if isinstance(value, dict)
+                    }
                 
                 if "project_path" in settings:
                     self._project_var.set(settings["project_path"])
@@ -2356,9 +2524,14 @@ class AutoPromptGUI:
                     self._enable_overlay_var.set(settings["enable_overlay"])
                 if "use_ocr_click" in settings:
                     self._use_ocr_var.set(settings["use_ocr_click"])
-                if "refresh_before_step" in settings:
-                    self._refresh_step_var.set(settings["refresh_before_step"])
-                    self.bridge.refresh_before_step = settings["refresh_before_step"]
+                # Older settings inherited a checked-by-default refresh toggle. Disable
+                # that legacy default once; retain an explicit choice saved by version 2.
+                if settings.get("settings_version", 1) >= 2:
+                    refresh_before_step = bool(settings.get("refresh_before_step", False))
+                else:
+                    refresh_before_step = False
+                self._refresh_step_var.set(refresh_before_step)
+                self.bridge.refresh_before_step = refresh_before_step
                 if "auto_rotate_model" in settings:
                     self._auto_rotate_var.set(settings["auto_rotate_model"])
                     self.bridge.auto_rotate_model = settings["auto_rotate_model"]

@@ -253,6 +253,8 @@ class WorkflowEngine:
     def _run_workflow(self):
         """Main workflow execution loop with automatic retry of failed steps before advancing"""
         workflow = self._current_workflow
+        workflow_failed = False
+        workflow_error = None
         
         while True:
             total_steps = len(workflow.steps)
@@ -370,6 +372,7 @@ class WorkflowEngine:
                                     pass
 
                             logger.error(f"Step {i + 1} permanently failed after {step.retry_count} retries. Pausing workflow.")
+                            workflow_failed = True
                             self.pause()
                             break
                     else:
@@ -411,7 +414,7 @@ class WorkflowEngine:
                     i += 1
                 
                 # Workflow loop run complete
-                if not self.loop_mode or self._cancel_requested:
+                if not self.loop_mode or self._cancel_requested or workflow_failed:
                     break
                 
                 # Handle Looping
@@ -443,15 +446,12 @@ class WorkflowEngine:
 
             except Exception as e:
                 logger.error(f"Workflow execution error: {e}")
-                if self.on_workflow_done:
-                    try:
-                        self.on_workflow_done(workflow, f"error: {e}")
-                    except Exception:
-                        pass
+                workflow_failed = True
+                workflow_error = f"error: {e}"
                 break
 
         # Final completion
-        status = "cancelled" if self._cancel_requested else "completed"
+        status = "cancelled" if self._cancel_requested else (workflow_error or ("failed" if workflow_failed else "completed"))
         if self.on_progress:
             try:
                 self.on_progress(len(workflow.steps), len(workflow.steps), 100)

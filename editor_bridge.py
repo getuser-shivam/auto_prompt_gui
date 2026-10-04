@@ -10,6 +10,7 @@ import subprocess
 import time
 import shutil
 import threading
+import uuid
 from pathlib import Path
 from typing import Optional, List, Dict, Callable, Tuple, Any
 from datetime import datetime
@@ -77,6 +78,10 @@ except ImportError:
 
 class EditorBridge:
     """Bridge to interact with AI coding editors"""
+
+    _window_assignment_lock = threading.RLock()
+    _window_assignments: Dict[str, int] = {}
+    _interaction_locks: Dict[Any, threading.RLock] = {}
 
     EDITORS = {
         "antigravity": {
@@ -174,18 +179,22 @@ class EditorBridge:
         },
     }
 
-    def __init__(self, project_path: str = None, editor: str = "antigravity"):
+    def __init__(self, project_path: str = None, editor: str = "antigravity", browser_session_id: str = None):
         self._project_path = Path(project_path).resolve() if project_path else Path.cwd().resolve()
         self._editor = editor if editor in self.EDITORS else "antigravity"
+        self.browser_session_id = browser_session_id or f"editor-{uuid.uuid4().hex}"
         self._mode = "clipboard"  # clipboard | file_drop | terminal | auto_interact
         self._auto_focus = True
         self.use_ocr_click = True
-        self.refresh_before_step = True  # Auto-refresh page before each step for Google AI Studio
-        self.auto_rotate_model = True    # Auto-switch to next free model if quota is exceeded
-        self.auto_republish_test = True  # Auto-republish and test live web app in browser
+        self.refresh_before_step = False  # Keep the AI Studio chat session alive between workflow steps
+        self.auto_rotate_model = True    # Auto-switch to another available model if quota is exceeded
+        self.auto_republish_test = True  # Auto-publish or republish after workflow completion
         self.detected_browser_url = ""   # Stores last detected browser URL
         self.last_ai_studio_error = None # Stores last detected Google AI Studio error
         self._model_rotation_count = 0
+        self._ai_studio_prompt_count = 0
+        self._ai_studio_quota_switch_count = 0
+        self._ai_studio_current_model = ""
         self._pre_prompt_errors = set()
         self._log_history: List[Dict] = []
 
@@ -267,6 +276,16 @@ class EditorBridge:
         # If not a web browser or specialized target, fallback to generic running check
         if self._editor not in ["google_ai_studio"]:
             return self.is_editor_running()
+
+        if get_playwright_manager:
+            try:
+                pw = get_playwright_manager(self.browser_session_id)
+                state = pw.get_chat_status()
+                if state.get("connected") and state.get("is_ai_studio"):
+                    self.detected_browser_url = state.get("url", "")
+                    return True
+            except Exception:
+                pass
         
         # For Google AI Studio, ensure a window matching the title is found
         hwnd = self._find_editor_window()
@@ -336,6 +355,18 @@ class EditorBridge:
             raise RuntimeError(error_msg)
 
     def send_and_wait(self, prompt: str) -> str:
+        """Run one complete interaction without interleaving prompts in a shared editor window."""
+        if self._editor == "google_ai_studio" and get_playwright_manager:
+            try:
+                if get_playwright_manager(self.browser_session_id).is_connected():
+                    return self._send_and_wait_locked(prompt)
+            except Exception:
+                pass
+        hwnd = self._find_editor_window()
+        with self._interaction_lock(hwnd):
+            return self._send_and_wait_locked(prompt)
+
+    def _send_and_wait_locked(self, prompt: str) -> str:
         """
         Convenience method for auto_interact: send and block until done.
         Returns only after the conversation is confirmed done.
@@ -362,20 +393,19 @@ class EditorBridge:
         # Guard: Ensure any ongoing Google AI Studio conversation is finished before refreshing or sending
         if self._editor == "google_ai_studio":
             hwnd = self._find_editor_window()
-            if hwnd:
-                gen_check = self._check_google_ai_studio_generation(hwnd)
-                if gen_check.get("is_generating"):
-                    r_text = gen_check.get("running_text") or "ongoing generation"
-                    self._log(f"Previous conversation is still generating ({r_text}). Waiting for it to finish before proceeding...", "info")
-                    self._emit_status("waiting", f"🔵 Previous generation still running ({r_text}). Adding delay...")
-                    wait_res = self._wait_for_google_ai_studio_completion(hwnd)
-                    if wait_res == "cancelled":
-                        return "⏹ Wait cancelled"
-                    elif wait_res and wait_res.startswith("error:"):
-                        return f"❌ {wait_res}"
+            gen_check = self._check_google_ai_studio_generation(hwnd)
+            if gen_check.get("is_generating"):
+                r_text = gen_check.get("running_text") or "ongoing generation"
+                self._log(f"Previous conversation is still generating ({r_text}). Waiting for it to finish before proceeding...", "info")
+                self._emit_status("waiting", f"🔵 Previous generation still running ({r_text}). Waiting before next send...")
+                wait_res = self._wait_for_google_ai_studio_completion(hwnd)
+                if wait_res == "cancelled":
+                    return "⏹ Wait cancelled"
+                elif wait_res and wait_res.startswith("error:"):
+                    return f"❌ {wait_res}"
 
         # Refresh page before each step for Google AI Studio only
-        if self._editor == "google_ai_studio" and getattr(self, "refresh_before_step", True):
+        if self._editor == "google_ai_studio" and getattr(self, "refresh_before_step", False):
             self.refresh_google_ai_studio()
 
         self._emit_status("typing", "Typing prompt into editor...")
@@ -391,6 +421,8 @@ class EditorBridge:
                 return "⏹ Wait cancelled"
 
             send_result = self._send_via_auto_interact(prompt)
+            if self._editor == "google_ai_studio":
+                self._ai_studio_prompt_count += 1
 
             self._emit_status("waiting", "Waiting for AI to finish...")
             done = self._wait_for_completion()
@@ -409,7 +441,7 @@ class EditorBridge:
         elif done == "timeout":
             return f"{send_result} → ⚠️ Timed out after {self._completion_timeout}s"
         elif done == "retry_with_new_model":
-            return f"{send_result} → ❌ Quota exceeded on all available free models"
+            return f"{send_result} → ❌ Quota exceeded on all available models"
         elif done and done.startswith("error:"):
             return f"{send_result} → ❌ {done}"
 
@@ -431,6 +463,30 @@ class EditorBridge:
                 self.on_status_change(status, detail)
             except Exception:
                 pass
+
+    @staticmethod
+    def _format_ai_studio_usage(state: Dict[str, Any]) -> str:
+        parts = [f"AI Studio · {state.get('model') or 'model unknown'}"]
+        parts.append(f"steps sent: {state.get('submitted', 0)}")
+        parts.append(f"quota switches: {state.get('quota_switches', 0)}")
+        if state.get("usage_text"):
+            parts.append(state["usage_text"])
+        return " | ".join(parts)
+
+    def _send_with_playwright(self, pw, prompt: str, state=None) -> str:
+        state = state or pw.get_chat_status()
+        remaining = state.get("usage_remaining")
+        if self.auto_rotate_model and remaining is not None and remaining <= 1:
+            self._emit_status("typing", f"Only {remaining} AI Studio request(s) remain on this model. Switching before send...")
+            if pw.rotate_model():
+                self._ai_studio_quota_switch_count += 1
+                try:
+                    state = pw.get_chat_status()
+                    self._ai_studio_current_model = state.get("model", "")
+                except Exception:
+                    pass
+                self._emit_status("waiting", self._format_ai_studio_usage(state))
+        return pw.send_prompt(prompt)
 
     def _send_via_clipboard(self, prompt: str) -> str:
         """Copy prompt to clipboard and optionally focus editor"""
@@ -573,7 +629,7 @@ class EditorBridge:
                 url = target if (target.startswith("http://") or target.startswith("https://")) else "https://aistudio.google.com/"
                 if get_playwright_manager:
                     try:
-                        pw = get_playwright_manager()
+                        pw = get_playwright_manager(self.browser_session_id)
                         if pw.launch_ai_studio_browser(url):
                             self._log(f"Launched Google AI Studio automated browser via Playwright DOM: {url}", "success")
                             return True
@@ -746,6 +802,31 @@ class EditorBridge:
         if self._editor == "groq":
             return self._send_via_clipboard(prompt) + " (Groq Virtual Editor Mode)"
 
+        # Prefer the workflow's own DOM-connected AI Studio tab. Launch the managed
+        # browser only when no ordinary browser window is available to use as fallback.
+        if self._editor == "google_ai_studio" and get_playwright_manager:
+            try:
+                pw = get_playwright_manager(self.browser_session_id)
+                if not pw.ensure_page() and not self._find_editor_window():
+                    self._emit_status("waiting", "Opening a managed AI Studio browser tab...")
+                    pw.launch_ai_studio_browser("https://aistudio.google.com/")
+                if pw.is_connected():
+                    state = pw.get_chat_status()
+                    if state.get("is_ai_studio") and state.get("chat_ready"):
+                        self._emit_status("waiting", self._format_ai_studio_usage(state))
+                        return self._send_with_playwright(pw, prompt, state)
+                    if state.get("requires_login"):
+                        self._emit_status("warning", "Log into Google AI Studio in the managed browser; the workflow will resume after login.")
+                        return self._send_with_playwright(pw, prompt, state)
+                    if state.get("is_ai_studio"):
+                        detail = "Google AI Studio is open, but a chat screen is not ready. Open or start a chat before running this workflow."
+                        self._emit_status("error", detail)
+                        raise RuntimeError(detail)
+            except RuntimeError:
+                raise
+            except Exception as e:
+                logger.warning(f"Playwright AI Studio connection failed: {e}")
+
         # 1. Find and focus the editor window
         hwnd = self._find_editor_window()
         if not hwnd:
@@ -761,30 +842,24 @@ class EditorBridge:
         if self._editor == "google_ai_studio":
             if get_playwright_manager:
                 try:
-                    pw = get_playwright_manager()
+                    pw = get_playwright_manager(self.browser_session_id)
                     if pw.ensure_page():
-                        url = pw.get_url()
-                        if "welcome" in url or "accounts.google" in url or "sign-in" in url:
-                            self._emit_status("warning", "Please log into Google AI Studio in the browser...")
-                            import tkinter as tk
-                            from tkinter import messagebox
-                            root = tk.Tk()
-                            root.withdraw()
-                            root.attributes("-topmost", True)
-                            messagebox.showinfo("Login Required", 
-                                "The automated browser has opened, but it looks like you are not logged in.\n\n"
-                                "Please log into your Google Account in that browser window until you see the AI Studio chat interface.\n\n"
-                                "Click OK here ONLY AFTER you have logged in and the chat interface is visible.", 
-                                master=root)
-                            root.destroy()
-                        logger.info("Injecting prompt directly via Playwright DOM...")
-                        return pw.send_prompt(prompt)
+                        state = pw.get_chat_status()
+                        if not state.get("is_ai_studio") or not state.get("chat_ready"):
+                            detail = f"Google AI Studio is connected, but no chat screen was detected ({state.get('url', 'unknown URL')}). Open a chat and retry."
+                            self._emit_status("error", detail)
+                            raise RuntimeError(detail)
+                        self._emit_status("waiting", self._format_ai_studio_usage(state))
+                        logger.info("Injecting prompt directly into the detected AI Studio chat via Playwright DOM...")
+                        return self._send_with_playwright(pw, prompt, state)
                     else:
-                        msg = "⚠️ Playwright CDP not found. Falling back to Web UIA (Screen tracking). Please launch browser via 'Open AI Studio' button for reliable DOM automation."
+                        msg = "⚠️ Playwright CDP is not connected. Falling back to browser UI Automation. Use Open AI Studio for DOM control."
                         logger.warning(msg)
                         self._log(msg, "warning")
                         self._emit_status("warning", "Playwright CDP not found. Using UIA fallback.")
                 except Exception as e:
+                    if isinstance(e, RuntimeError):
+                        raise
                     logger.warning(f"Playwright DOM prompt injection error: {e}. Falling back to Web UIA.")
             return self._send_via_web_uia(prompt, hwnd)
 
@@ -936,7 +1011,7 @@ class EditorBridge:
 
         if get_playwright_manager:
             try:
-                pw = get_playwright_manager()
+                pw = get_playwright_manager(self.browser_session_id)
                 if pw.is_connected():
                     self._emit_status("refresh", "🔄 Refreshing Google AI Studio page via Playwright DOM...")
                     return pw.refresh_page()
@@ -1021,12 +1096,16 @@ class EditorBridge:
             "failed to generate",
             "something went wrong",
             "internal error",
+            "invalid argument",
+            "invalid request",
+            "bad request",
+            "permission denied",
         ]
         detected = []
 
         if get_playwright_manager:
             try:
-                pw = get_playwright_manager()
+                pw = get_playwright_manager(self.browser_session_id)
                 if pw.is_connected():
                     pw_errors = pw.detect_errors()
                     if pw_errors:
@@ -1104,6 +1183,10 @@ class EditorBridge:
             "model is overloaded",
             "something went wrong",
             "failed to generate",
+            "invalid argument",
+            "invalid request",
+            "bad request",
+            "permission denied",
         ]
         script_dir = os.path.dirname(os.path.abspath(__file__))
         ocr_script = os.path.join(script_dir, "ocr_helper.ps1")
@@ -1254,17 +1337,23 @@ class EditorBridge:
 
     def rotate_google_ai_studio_model(self, hwnd=None) -> bool:
         """
-        Rotates the active Google AI Studio model to the next available free model
-        when quota is exceeded.
+        Rotates the active Google AI Studio model to another available model when quota is exceeded.
         Opens Chat settings sidebar if closed, clicks Model selector dropdown,
-        cycles to an available free tier model, and auto-clicks [Retry] if present.
+        cycles to an enabled model, and auto-clicks [Retry] if present.
         """
         if get_playwright_manager:
             try:
-                pw = get_playwright_manager()
+                pw = get_playwright_manager(self.browser_session_id)
+                if not pw.is_connected():
+                    pw.ensure_page()
                 if pw.is_connected():
                     self._log("Rotating Google AI Studio model via Playwright DOM...", "info")
                     if pw.rotate_model():
+                        self._ai_studio_quota_switch_count += 1
+                        try:
+                            self._ai_studio_current_model = pw.get_chat_status().get("model", "")
+                        except Exception:
+                            pass
                         return True
             except Exception as e:
                 logger.debug(f"Playwright rotate_model: {e}")
@@ -1425,7 +1514,7 @@ class EditorBridge:
 
         time.sleep(0.5)
 
-        # 4. Cycle to next available free model
+        # 4. Cycle to another available model
         self._model_rotation_count = getattr(self, "_model_rotation_count", 0) + 1
         model_selected = False
 
@@ -1433,13 +1522,16 @@ class EditorBridge:
         try:
             import uiautomation as auto
             root = auto.GetRootControl()
-            free_targets = ["Gemini 2.5 Flash", "Gemini 2.0 Flash", "Gemini Flash Lite", "Gemini 1.5 Flash", "Gemini 1.5 Pro", "Gemini 2.5 Pro"]
-            for target_name in free_targets:
+            available_targets = [
+                "Gemini 3 Pro", "Gemini 3 Flash", "Gemini 2.5 Pro", "Gemini 2.5 Flash",
+                "Gemini 2.0 Flash", "Gemini Flash Lite", "Gemini 1.5 Pro", "Gemini 1.5 Flash",
+            ]
+            for target_name in available_targets:
                 opt = root.Control(searchDepth=10, Name=target_name)
                 if opt.Exists(0.2, 0.05):
                     opt.Click(waitTime=0.2)
                     model_selected = True
-                    logger.info(f"UIA selected free model: {target_name}")
+                    logger.info(f"UIA selected available model: {target_name}")
                     break
         except Exception:
             pass
@@ -1449,7 +1541,7 @@ class EditorBridge:
             # Press Home to jump to top of list
             self._press_key("home")
             time.sleep(0.15)
-            # Cycle through free models by pressing Down arrow (rotation_count % 4 + 1) times
+            # Move to another option in the visible model menu.
             steps = (self._model_rotation_count % 4) + 1
             for _ in range(steps):
                 self._press_key("down")
@@ -1462,7 +1554,9 @@ class EditorBridge:
         self._press_key("escape")
         time.sleep(0.3)
 
-        self._log(f"Switched Google AI Studio to next free model (rotation #{self._model_rotation_count})", "success")
+        self._log(f"Switched Google AI Studio to another available model (rotation #{self._model_rotation_count})", "success")
+        self._ai_studio_quota_switch_count += 1
+        self._ai_studio_current_model = f"rotation #{self._model_rotation_count}"
         self._emit_status("typing", f"Model rotated (#{self._model_rotation_count}). Ready to send prompt.")
 
         # 5. Check if [Retry] button is present in the chat pane and click it
@@ -1491,8 +1585,28 @@ class EditorBridge:
 
     def republish_and_test_ai_studio(self, hwnd=None) -> bool:
         """
-        Publishes/Republishes the Google AI Studio project and launches the live preview in browser for testing.
+        Publishes/Republishes the Google AI Studio app and leaves the browser on AI Studio.
         """
+        if get_playwright_manager:
+            try:
+                pw = get_playwright_manager(self.browser_session_id)
+                if not pw.is_connected():
+                    pw.ensure_page()
+                if pw.is_connected():
+                    state = pw.get_chat_status()
+                    if not state.get("is_ai_studio") or not state.get("chat_ready"):
+                        self._emit_status("error", "Republish requires an open Google AI Studio chat screen.")
+                        return False
+                    self._emit_status("waiting", "Publishing or republishing from the AI Studio publish panel...")
+                    success = pw.republish_and_test()
+                    if success:
+                        self._emit_status("done", "✅ AI Studio publish/republish completed. The publish panel remains open.")
+                    else:
+                        self._emit_status("error", "AI Studio publish/republish did not confirm a completed deployment.")
+                    return success
+            except Exception as e:
+                logger.warning(f"Playwright publish action failed, attempting UIA fallback: {e}")
+
         import ctypes
         import time
         import pyautogui
@@ -1513,103 +1627,114 @@ class EditorBridge:
         self._emit_status("waiting", "🚀 Initiating project publication in Google AI Studio...")
         self._log("Initiating project publication in Google AI Studio...", "info")
 
-        # 2. Click Publish header button (top right header)
-        publish_hdr_clicked = False
-        try:
-            import uiautomation as auto
-            window = auto.ControlFromHandle(hwnd)
-            if window and window.Exists(1, 0.2):
-                doc = window.DocumentControl(searchDepth=8)
-                if doc.Exists(1, 0.2):
-                    doc_rect = doc.BoundingRectangle
-                    btn = doc.ButtonControl(searchDepth=14, Name="Publish")
-                    if btn.Exists(0.5, 0.1):
-                        b_rect = btn.BoundingRectangle
-                        if b_rect and (doc_rect is None or b_rect.left >= doc_rect.left + doc_rect.width * 0.65):
-                            btn.Click(waitTime=0.2)
-                            publish_hdr_clicked = True
-                            logger.info(f"UIA clicked Publish header button at {b_rect}")
-        except Exception as e:
-            logger.debug(f"UIA Publish header search: {e}")
-
-        if not publish_hdr_clicked:
-            publish_hdr_clicked = bool(self.find_and_click_ocr_target(
-                ["publish"], region_filter=(0.65, 0.98, 0.05, 0.22), hwnd=hwnd
-            ))
-
-        time.sleep(2.0)
-
-        # 3. Click 'Republish' or 'Publish' inside the Publish sidebar panel
-        republish_clicked = False
-        try:
-            import uiautomation as auto
-            window = auto.ControlFromHandle(hwnd)
-            if window and window.Exists(1, 0.2):
-                doc = window.DocumentControl(searchDepth=8)
-                if doc.Exists(0.5, 0.1):
-                    for name in ["Republish", "Publish"]:
-                        btn = doc.ButtonControl(searchDepth=14, Name=name)
-                        if not btn.Exists(0.2, 0.1):
-                            btn = doc.HyperlinkControl(searchDepth=14, Name=name)
-                        if btn.Exists(0.3, 0.1):
-                            btn.Click(waitTime=0.2)
-                            republish_clicked = True
-                            logger.info(f"UIA clicked sidebar {name} button")
-                            break
-        except Exception as e:
-            logger.debug(f"UIA Republish search: {e}")
-
-        if not republish_clicked:
-            republish_clicked = bool(self.find_and_click_ocr_target(
-                ["republish", "publish"], region_filter=(0.65, 0.98, 0.15, 0.70), hwnd=hwnd
-            ))
-
-        self._emit_status("waiting", "🚀 Build deploying... Waiting for 'Ready' status...")
-        self._log("Build deploying... Waiting for 'Ready' status...", "info")
-
-        # 4. Wait for deployment / build to complete (sleep + polling for Visit button)
-        time.sleep(3.5)
-
-        # 5. Click 'Visit' button to launch the live web app in the browser
-        visit_clicked = False
-        for wait_attempt in range(6):
+        def click_named_control(name):
             try:
                 import uiautomation as auto
                 window = auto.ControlFromHandle(hwnd)
-                if window and window.Exists(1, 0.2):
-                    doc = window.DocumentControl(searchDepth=8)
-                    if doc.Exists(0.5, 0.1):
-                        btn = doc.ButtonControl(searchDepth=14, Name="Visit")
-                        if not btn.Exists(0.2, 0.1):
-                            btn = doc.HyperlinkControl(searchDepth=14, Name="Visit")
-                        if btn.Exists(0.2, 0.1):
-                            btn.Click(waitTime=0.2)
-                            visit_clicked = True
-                            logger.info("UIA clicked Visit button")
-                            break
+                if not window or not window.Exists(0.5, 0.1):
+                    return False
+                doc = window.DocumentControl(searchDepth=8)
+                if not doc.Exists(0.5, 0.1):
+                    return False
+                for factory in (doc.ButtonControl, doc.HyperlinkControl):
+                    control = factory(searchDepth=16, Name=name)
+                    if control.Exists(0.2, 0.1):
+                        control.Click(waitTime=0.2)
+                        logger.info(f"UIA clicked publish flow control: {name}")
+                        return True
             except Exception as e:
-                logger.debug(f"UIA Visit search attempt {wait_attempt}: {e}")
-
-            if not visit_clicked:
-                visit_clicked = bool(self.find_and_click_ocr_target(
-                    ["visit"], region_filter=(0.60, 0.90, 0.15, 0.70), hwnd=hwnd
-                ))
-                if visit_clicked:
-                    break
-
-            time.sleep(1.5)
-
-        if visit_clicked:
-            time.sleep(2.0)
-            # Opportunistically detect live app URL
-            app_url = self.detect_browser_url(hwnd)
-            msg = f"Live app published and opened in browser! URL: {app_url or 'active tab'}"
-            self._emit_status("done", f"✅ {msg}")
-            self._log(msg, "success")
-            return True
-        else:
-            self._log("Republish triggered, but Visit button not reached within timeout", "warning")
+                logger.debug(f"UIA publish control '{name}': {e}")
             return False
+
+        def control_exists(name):
+            try:
+                import uiautomation as auto
+                window = auto.ControlFromHandle(hwnd)
+                if not window or not window.Exists(0.3, 0.1):
+                    return False
+                doc = window.DocumentControl(searchDepth=8)
+                if not doc.Exists(0.3, 0.1):
+                    return False
+                return any(factory(searchDepth=16, Name=name).Exists(0.1, 0.05)
+                           for factory in (doc.ButtonControl, doc.HyperlinkControl, doc.TextControl))
+            except Exception:
+                return False
+
+        def click_ocr(names):
+            return bool(self.find_and_click_ocr_target(
+                names, region_filter=(0.62, 0.99, 0.12, 0.78), hwnd=hwnd
+            ))
+
+        def api_usage_step_visible():
+            return control_exists("Control Gemini API usage") or bool(
+                self.find_and_click_ocr_target(
+                    ["Control Gemini API usage"],
+                    region_filter=(0.62, 0.99, 0.10, 0.40),
+                    hwnd=hwnd,
+                    click=False,
+                )
+            )
+
+        # Try the actual sidebar action first. Clicking the toolbar Publish tab while
+        # its panel is already open can close it and leave the action untouched.
+        action_started = click_named_control("Republish") or click_ocr(["republish"])
+        if not action_started:
+            action_started = click_named_control("Publish your app") or click_ocr(["publish your app"])
+        if not action_started and api_usage_step_visible():
+            action_started = click_named_control("Continue") or click_ocr(["continue"])
+
+        if not action_started:
+            # Open the panel only when no panel action or wizard control was found.
+            header_clicked = click_named_control("Publish")
+            if not header_clicked:
+                header_clicked = click_ocr(["publish"])
+            if header_clicked:
+                time.sleep(1.0)
+                action_started = (
+                    click_named_control("Republish")
+                    or click_ocr(["republish"])
+                    or click_named_control("Publish your app")
+                    or click_ocr(["publish your app"])
+                    or (api_usage_step_visible() and
+                        (click_named_control("Continue") or click_ocr(["continue"])))
+                )
+
+        if not action_started:
+            self._emit_status("error", "Could not find Republish, Continue, or Publish your app in the AI Studio publish panel.")
+            return False
+
+        # AI Studio may insert the API usage step before its Final touches screen.
+        for _ in range(3):
+            if api_usage_step_visible() and (click_named_control("Continue") or click_ocr(["continue"])):
+                time.sleep(0.8)
+                continue
+            if click_named_control("Publish your app") or click_ocr(["publish your app"]):
+                action_started = True
+                time.sleep(0.8)
+                continue
+            break
+
+        self._emit_status("waiting", "🚀 Publish/republish submitted. Waiting for deployment to finish...")
+        self._log("Publish/republish submitted. Waiting for deployment status...", "info")
+
+        stable_ready = 0
+        for wait_attempt in range(90):
+            in_progress = any(control_exists(label) for label in ("In progress", "Building", "Deploying", "Publishing"))
+            republish_ready = control_exists("Republish")
+            if republish_ready and not in_progress and wait_attempt >= 4:
+                stable_ready += 1
+                if stable_ready >= 2:
+                    msg = "AI Studio app publish/republish completed; left on the publish panel."
+                    self._emit_status("done", f"✅ {msg}")
+                    self._log(msg, "success")
+                    return True
+            else:
+                stable_ready = 0
+            time.sleep(1.0)
+
+        self._emit_status("error", "AI Studio did not confirm that the deployment finished.")
+        self._log("Publish/republish was not confirmed before the timeout.", "error")
+        return False
 
     def _send_via_web_uia(self, prompt: str, hwnd) -> str:
         """Targeted UIA interaction for Google AI Studio running in a web browser.
@@ -1642,13 +1767,13 @@ class EditorBridge:
             "quota", "exhausted", "rate limit", "overloaded", "resource has been exhausted", "try again later"
         ])
         if is_quota and getattr(self, "auto_rotate_model", True):
-            self._emit_status("typing", "Quota exceeded detected before typing. Auto-switching to next free model...")
-            self._log("Active Quota exceeded detected! Auto-switching Google AI Studio to next free model...", "warning")
+            self._emit_status("typing", "Quota exceeded detected before typing. Switching to another available model...")
+            self._log("Active quota detected. Switching Google AI Studio to another available model...", "warning")
             self.rotate_google_ai_studio_model(hwnd)
             time.sleep(1.5)
             # If model rotation auto-clicked Retry and generation has started, we don't need to retype!
             if self._is_web_generating(hwnd):
-                return f"✅ Model rotated to free tier and generation resumed via Retry button ({len(prompt)} chars)"
+                return f"✅ Model changed and generation resumed via Retry button ({len(prompt)} chars)"
             # Refresh errors after rotation
             existing_errors = self.detect_google_ai_studio_errors(hwnd)
 
@@ -1717,9 +1842,9 @@ class EditorBridge:
                     return
                 try:
                     c_type = ctrl.ControlTypeName
-                    if c_type in ("EditControl", "Edit"):
+                    if c_type in ("EditControl", "Edit", "GroupControl", "PaneControl", "DocumentControl"):
                         rect = ctrl.BoundingRectangle
-                        if rect and rect.width > 50:
+                        if rect and rect.width > 200:
                             # MUST BE STRICTLY WITHIN CHAT SCREEN
                             if (rect.left >= chat_left - 30 and rect.right <= chat_right + 60 and 
                                 rect.bottom >= doc_rect.bottom - 260):
@@ -1741,9 +1866,9 @@ class EditorBridge:
                 def collect_chat_edits(ctrl, depth=0):
                     if depth > 12: return
                     try:
-                        if ctrl.ControlTypeName in ("EditControl", "Edit"):
+                        if ctrl.ControlTypeName in ("EditControl", "Edit", "GroupControl", "PaneControl", "DocumentControl"):
                             rect = ctrl.BoundingRectangle
-                            if rect and rect.width > 50:
+                            if rect and rect.width > 200:
                                 if (rect.left >= chat_left - 30 and rect.right <= chat_right + 60 and
                                     rect.bottom >= doc_rect.bottom - 260):
                                     bottom_edits.append(ctrl)
@@ -1765,7 +1890,7 @@ class EditorBridge:
             if prompt_input_ctrl and prompt_input_ctrl.BoundingRectangle and prompt_input_ctrl.BoundingRectangle.width > 0:
                 in_rect = prompt_input_ctrl.BoundingRectangle
                 logger.info(f"UIA found prompt input in Chat Screen: '{prompt_input_ctrl.Name}' at {in_rect}")
-                click_x = in_rect.left + 50
+                click_x = in_rect.left + int(in_rect.width * 0.3)
                 click_y = in_rect.top + int(in_rect.height * 0.5)
             else:
                 # Scoped fallback: inside chat pane, 80px from bottom of window/doc
@@ -1883,8 +2008,8 @@ class EditorBridge:
             except Exception:
                 pass
 
-        # 1. Click into Chat input area (~20% from left, ~85px from bottom)
-        input_x = w_left + int(w_width * 0.20)
+        # 1. Click into Chat input area (~35% from left, ~85px from bottom)
+        input_x = w_left + int(w_width * 0.35)
         input_y = w_top + w_height - 85
         logger.info(f"Fallback: Clicking chat input area at ({input_x}, {input_y})")
         pyautogui.click(input_x, input_y)
@@ -1953,7 +2078,7 @@ class EditorBridge:
         return None
 
     def _find_editor_window(self) -> Optional[int]:
-        """Find the editor's main window handle"""
+        """Find and reserve one visible editor window for this workflow bridge."""
         try:
             import ctypes
             from ctypes import wintypes
@@ -1968,10 +2093,9 @@ class EditorBridge:
                 wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
             )
 
-            found_hwnd = None
+            title_matches = []
 
             def enum_callback(hwnd, lparam):
-                nonlocal found_hwnd
                 if user32.IsWindowVisible(hwnd):
                     length = user32.GetWindowTextLengthW(hwnd)
                     if length > 0:
@@ -1980,35 +2104,49 @@ class EditorBridge:
                         title = buff.value
                         for term in search_terms:
                             if term.lower() in title.lower():
-                                found_hwnd = hwnd
-                                return False  # stop
+                                title_matches.append(int(hwnd))
+                                break
                 return True
 
             user32.EnumWindows(EnumWindowsProc(enum_callback), 0)
-            if found_hwnd:
-                return found_hwnd
+            candidates = title_matches
+            if not candidates:
+                pids = set(self._get_editor_pids())
+                if not pids:
+                    return None
 
-            # Fallback: match by process name
-            pids = self._get_editor_pids()
-            if not pids:
+                def enum_pid_callback(hwnd, lparam):
+                    if user32.IsWindowVisible(hwnd):
+                        pid = wintypes.DWORD()
+                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        if pid.value in pids:
+                            candidates.append(int(hwnd))
+                    return True
+
+                user32.EnumWindows(EnumWindowsProc(enum_pid_callback), 0)
+
+            if not candidates:
                 return None
-
-            def enum_pid_callback(hwnd, lparam):
-                nonlocal found_hwnd
-                if user32.IsWindowVisible(hwnd):
-                    pid = wintypes.DWORD()
-                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if pid.value in pids:
-                        found_hwnd = hwnd
-                        return False
-                return True
-
-            user32.EnumWindows(EnumWindowsProc(enum_pid_callback), 0)
-            return found_hwnd
+            session = self.browser_session_id
+            with self._window_assignment_lock:
+                previous = self._window_assignments.get(session)
+                used = {hwnd for owner, hwnd in self._window_assignments.items() if owner != session}
+                if previous in candidates and previous not in used and user32.IsWindowVisible(previous):
+                    return previous
+                selected = next((hwnd for hwnd in candidates if hwnd not in used), candidates[0])
+                self._window_assignments[session] = selected
+                return selected
 
         except Exception as e:
             logger.debug(f"Could not find editor window: {e}")
             return None
+
+    def _interaction_lock(self, hwnd=None):
+        key = ("hwnd", int(hwnd)) if hwnd else ("editor", self._editor)
+        with self._window_assignment_lock:
+            if key not in self._interaction_locks:
+                self._interaction_locks[key] = threading.RLock()
+            return self._interaction_locks[key]
 
     def _get_window_title(self, hwnd) -> str:
         """Get the current title of a window"""
@@ -2176,7 +2314,7 @@ class EditorBridge:
                     err_msg = " | ".join(new_errors)
                     is_quota = any(k in err_msg.lower() for k in ["quota", "exhausted", "rate limit", "overloaded", "resource has been exhausted", "try again later"])
                     if is_quota and getattr(self, "auto_rotate_model", True):
-                        self._emit_status("typing", "Quota exceeded. Auto-switching to next free model...")
+                        self._emit_status("typing", "Quota exceeded. Switching to another available model...")
                         logger.warning(f"Quota error detected: {err_msg}. Triggering model rotation...")
                         rotated = self.rotate_google_ai_studio_model(hwnd)
                         if rotated:
@@ -2291,7 +2429,7 @@ class EditorBridge:
         """
         if get_playwright_manager:
             try:
-                pw = get_playwright_manager()
+                pw = get_playwright_manager(self.browser_session_id)
                 if pw.is_connected():
                     pw_gen = pw.is_generating()
                     is_gen = pw_gen.get("is_generating", False)
@@ -2414,17 +2552,18 @@ class EditorBridge:
         Guarantees:
         1. Keeps waiting ('adds delay') as long as the AI conversation is running.
         2. Detects true completion or pre-ended conversations immediately without wasting time.
-        3. Automatically detects quota errors and triggers free model rotation.
+        3. Automatically detects quota errors and selects another available model.
         """
         if get_playwright_manager:
             try:
-                pw = get_playwright_manager()
+                pw = get_playwright_manager(self.browser_session_id)
                 if pw.is_connected():
                     logger.info("Waiting for Google AI Studio completion directly via Playwright DOM...")
                     return pw.wait_for_completion(
                         timeout_s=max(getattr(self, "_completion_timeout", 300), 900),
                         status_callback=self._emit_status,
-                        cancel_event=self._cancel_wait
+                        cancel_event=self._cancel_wait,
+                        auto_rotate=getattr(self, "auto_rotate_model", True),
                     )
             except Exception as e:
                 logger.warning(f"Playwright completion wait failed: {e}. Falling back to visual/UIA tracker.")
@@ -2464,7 +2603,7 @@ class EditorBridge:
                     "quota", "exhausted", "rate limit", "overloaded", "resource has been exhausted", "try again later"
                 ])
                 if is_quota and getattr(self, "auto_rotate_model", True):
-                    self._emit_status("typing", "Quota exceeded. Auto-switching to next free model...")
+                    self._emit_status("typing", "Quota exceeded. Switching to another available model...")
                     logger.warning(f"Quota error detected during generation: {err_msg}. Rotating model...")
                     rotated = self.rotate_google_ai_studio_model(hwnd)
                     if rotated:
@@ -2504,6 +2643,16 @@ class EditorBridge:
                     else:
                         # Beyond grace period: check if already completed or idle
                         if ran_text:
+                            # Check if "Ran for 0s" — this usually means error (Invalid argument, etc.)
+                            if "ran for 0s" in ran_text.lower() or "ran for 0 s" in ran_text.lower():
+                                # Re-check for errors since 0s completion usually means the API rejected the request
+                                web_errors = self.detect_google_ai_studio_errors(hwnd)
+                                pre_errors = getattr(self, "_pre_prompt_errors", set())
+                                new_errors = [e for e in web_errors if e not in pre_errors]
+                                if new_errors:
+                                    err_msg = " | ".join(new_errors)
+                                    self._emit_status("error", f"\u274c AI Studio Error: {err_msg}")
+                                    return f"error: {err_msg}"
                             # Finished very quickly
                             self._log(f"Google AI Studio generation complete: {ran_text}", "success")
                             time.sleep(1.0)
