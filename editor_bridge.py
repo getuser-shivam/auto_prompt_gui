@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Editor Bridge — Sends prompts to AI coding editors.
+Editor Bridge -- Sends prompts to AI coding editors.
 Supports clipboard paste, task-file drop, auto-interact, and process launching.
 """
 
@@ -204,15 +205,6 @@ class EditorBridge:
         self._post_completion_delay = 2.0  # cooldown after AI finishes
         self._cancel_wait = threading.Event()  # to cancel waiting early
         self._last_allow_time = 0.0  # limit frequency of check_and_allow
-        self._last_ocr_time = 0.0    # throttle PowerShell OCR to prevent lag and slow detection
-
-    def _should_run_ocr(self, min_interval: float = 5.0) -> bool:
-        """Throttle heavy PowerShell OCR subprocess calls to prevent system freeze."""
-        now = time.time()
-        if now - getattr(self, "_last_ocr_time", 0.0) >= min_interval:
-            self._last_ocr_time = now
-            return True
-        return False
 
         # Status callback for GUI live updates
         self.on_status_change: Optional[Callable[[str, str], None]] = None  # (status, detail)
@@ -1088,10 +1080,10 @@ class EditorBridge:
             logger.error(f"Failed to refresh Google AI Studio: {e}")
             return False
 
-    def detect_google_ai_studio_errors(self, hwnd=None, doc=None) -> List[str]:
+    def detect_google_ai_studio_errors(self, hwnd=None, doc=None, allow_ocr: bool = False) -> List[str]:
         """
         Scans Google AI Studio chat screen for active error banners / messages.
-        Returns list of detected error strings.
+        Returns list of detected error strings. Fast by default; OCR is opt-in to prevent lag.
         """
         error_keywords = [
             "unexpected error",
@@ -1130,16 +1122,16 @@ class EditorBridge:
                     hwnd = self._find_editor_window()
                 if hwnd:
                     window = auto.ControlFromHandle(hwnd)
-                    if window and window.Exists(1, 0.2):
-                        doc = window.DocumentControl(searchDepth=8)
+                    if window and window.Exists(0.5, 0.1):
+                        doc = window.DocumentControl(searchDepth=6)
 
-            if doc and doc.Exists(1, 0.2):
+            if doc and doc.Exists(0.5, 0.1):
                 doc_rect = doc.BoundingRectangle
                 chat_right = doc_rect.left + int(doc_rect.width * 0.45) if doc_rect else 999999
 
-                # Fast shallow scan of text elements in Document (focusing on left chat screen pane)
+                # Scan text elements in Document (focusing on left chat screen pane)
                 def scan_errors(ctrl, depth=0):
-                    if depth > 4:
+                    if depth > 6:
                         return
                     try:
                         name = (ctrl.Name or "").strip()
@@ -1163,8 +1155,8 @@ class EditorBridge:
         except Exception as e:
             logger.debug(f"UIA error scan error: {e}")
 
-        # Throttled OCR fallback (runs at most once every 5 seconds, not on every tick)
-        if not detected and self._should_run_ocr(5.0):
+        # OCR fallback only if explicitly allowed (avoids continuous PowerShell spawns)
+        if not detected and allow_ocr:
             try:
                 ocr_errors = self._scan_errors_via_ocr(hwnd)
                 if ocr_errors:
@@ -1752,60 +1744,35 @@ class EditorBridge:
         self._log("Publish/republish was not confirmed before the timeout.", "error")
         return False
 
-    def _send_via_web_uia(self, prompt: str, hwnd) -> str:
-        """Targeted UIA interaction for Google AI Studio running in a web browser.
-        
-        Detects URL, verifies active page, restricts input strictly to the
-        left-side Chat Screen, types prompt into the exact prompt input area,
-        and clicks the up-arrow Send button.
+    def _send_via_web_uia(self, prompt: str, hwnd=None) -> str:
+        """
+        Fast and accurate prompt injection into Google AI Studio:
+        Brings window to front, targets the left chat textarea directly, pastes,
+        and submits via Ctrl+Enter and Send button. No laggy recursive tree walking.
         """
         import ctypes
         import time
+        import pyautogui
+        pyautogui.FAILSAFE = False
         user32 = ctypes.windll.user32
 
-        # 1. Bring window to front
+        if hwnd is None:
+            hwnd = self._find_editor_window()
+        if not hwnd:
+            return self._web_uia_fallback(prompt, hwnd)
+
+        # 1. Bring window to front and maximize
         user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
-        time.sleep(0.3)
         user32.SetForegroundWindow(hwnd)
-        time.sleep(0.5)
+        time.sleep(0.15)
 
-        self._emit_status("typing", "Detecting Google AI Studio URL & chat screen...")
+        self._emit_status("typing", "Typing prompt into Google AI Studio...")
 
-        # 2. Detect and verify URL
-        detected_url = self.detect_browser_url(hwnd)
-        if detected_url:
-            self._log(f"Detected Browser URL: {detected_url}", "info")
-            logger.info(f"Google AI Studio Browser URL: {detected_url}")
-
-        # 3. Check for active Quota Exceeded / Exhausted errors before typing prompt
-        existing_errors = self.detect_google_ai_studio_errors(hwnd)
-        is_quota = any(k in e.lower() for e in existing_errors for k in [
-            "quota", "exhausted", "rate limit", "overloaded", "resource has been exhausted", "try again later"
-        ])
-        if is_quota and getattr(self, "auto_rotate_model", True):
-            self._emit_status("typing", "Quota exceeded detected before typing. Switching to another available model...")
-            self._log("Active quota detected. Switching Google AI Studio to another available model...", "warning")
-            self.rotate_google_ai_studio_model(hwnd)
-            time.sleep(1.5)
-            # If model rotation auto-clicked Retry and generation has started, we don't need to retype!
-            if self._is_web_generating(hwnd):
-                return f"✅ Model changed and generation resumed via Retry button ({len(prompt)} chars)"
-            # Refresh errors after rotation
-            existing_errors = self.detect_google_ai_studio_errors(hwnd)
-
-        # Baseline errors that are NOT quota (e.g. historical scrollback)
-        self._pre_prompt_errors = {
-            e for e in existing_errors 
-            if not any(k in e.lower() for k in ["quota", "exhausted", "rate limit", "overloaded", "resource has been exhausted", "try again later"])
-        }
-        if self._pre_prompt_errors:
-            logger.info(f"Baseline error messages in scrollback: {list(self._pre_prompt_errors)}")
-
-        # Ensure previous conversation is completely finished before injecting next prompt
-        gen_check = self._check_google_ai_studio_generation(hwnd)
+        # 2. Fast check: active generation check without heavy OCR
+        gen_check = self._check_google_ai_studio_generation(hwnd, allow_ocr=False)
         if gen_check.get("is_generating"):
             r_text = gen_check.get("running_text") or "ongoing generation"
-            self._log(f"Previous conversation is still generating ({r_text}). Waiting for it to finish before typing next prompt...", "info")
+            self._log(f"Previous conversation is still generating ({r_text}). Waiting...", "info")
             self._emit_status("waiting", f"Waiting for active generation to finish ({r_text})...")
             wait_res = self._wait_for_google_ai_studio_completion(hwnd)
             if wait_res == "cancelled":
@@ -1815,99 +1782,88 @@ class EditorBridge:
             elif wait_res and wait_res.startswith("error:"):
                 return f"❌ {wait_res}"
 
+        # 3. Calculate prompt textarea coordinates
+        win_rect = self._get_window_rect(hwnd)
+        if not win_rect:
+            w_left, w_top, w_width, w_height = 0, 0, 1280, 800
+        else:
+            w_left, w_top = win_rect[0], win_rect[1]
+            w_width = win_rect[2] - win_rect[0]
+            w_height = win_rect[3] - win_rect[1]
+
+        # Google AI Studio layout:
+        # Left chat pane: ~44% of window width
+        chat_left = w_left
+        chat_right = w_left + int(w_width * 0.44)
+        chat_bottom = w_top + w_height
+
+        # Textarea is centered in left chat pane, ~110px above window bottom
+        # (well clear of the toolbar buttons at bottom - 40px)
+        click_x = chat_left + int((chat_right - chat_left) * 0.45)
+        click_y = chat_bottom - 110
+
+        # Try fast UIA element lookup for prompt box if readily available
         try:
             import uiautomation as auto
-            import pyautogui
-            pyautogui.FAILSAFE = False
+            win_ctrl = auto.ControlFromHandle(hwnd)
+            if win_ctrl and win_ctrl.Exists(0.2, 0.05):
+                doc = win_ctrl.DocumentControl(searchDepth=4)
+                if doc and doc.Exists(0.2, 0.05):
+                    # Check for prompt input box
+                    for kw in ["make changes", "ask for anything", "prompt"]:
+                        cand = doc.Control(searchDepth=6, Name=kw)
+                        if cand and cand.Exists(0.1, 0.05):
+                            cr = cand.BoundingRectangle
+                            if cr and cr.width > 100:
+                                click_x = cr.left + int(cr.width * 0.45)
+                                click_y = cr.top + int(cr.height * 0.45)
+                                break
+        except Exception:
+            pass
 
-            # Find browser window via UIA
-            window_title = self._get_window_title(hwnd)
-            window = auto.ControlFromHandle(hwnd)
-            if not window or not window.Exists(1, 0.2):
-                window = auto.WindowControl(searchDepth=1, handle=hwnd)
-            if not window.Exists(2, 0.3):
-                window = auto.WindowControl(searchDepth=1, Name=window_title)
+        # Dismiss any leftover menu popup / modal
+        self._press_key("escape")
+        time.sleep(0.08)
 
-            if not window.Exists(2, 0.3):
-                logger.error("UIA cannot find browser window")
-                return self._web_uia_fallback(prompt, hwnd)
+        # 4. Click squarely into prompt textarea
+        logger.info(f"Targeting prompt input area at ({click_x}, {click_y})")
+        pyautogui.click(click_x, click_y)
+        time.sleep(0.12)
 
-            # 4. Define Chat Screen Boundary (Left pane, ~42% of document width)
-            win_rect = self._get_window_rect(hwnd)
-            win_left = win_rect[0] if win_rect else 0
-            win_top = win_rect[1] if win_rect else 0
-            win_width = (win_rect[2] - win_rect[0]) if win_rect else 1920
-            win_height = (win_rect[3] - win_rect[1]) if win_rect else 1080
+        # 5. Clear existing text and paste prompt
+        self._press_hotkey("ctrl+a")
+        time.sleep(0.04)
+        self._press_key("backspace")
+        time.sleep(0.04)
 
-            doc = window.DocumentControl(searchDepth=3)
-            doc_rect = doc.BoundingRectangle if (doc and doc.Exists(0.5, 0.1)) else None
-            chat_left = doc_rect.left if doc_rect else win_left
-            chat_width = int((doc_rect.width if doc_rect else win_width) * 0.42)
-            chat_bottom = doc_rect.bottom if doc_rect else (win_top + win_height)
-            logger.info(f"Chat Screen Bounds: Left={chat_left}, Width={chat_width}, Bottom={chat_bottom}")
+        self._clipboard_set(prompt)
+        time.sleep(0.08)
+        self._press_hotkey("ctrl+v")
+        time.sleep(0.12)
 
-            # ── STEP 1: Dismiss any open dialogs/menus (Escape) ──
-            self._press_key("escape")
-            time.sleep(0.15)
+        # Trigger reactive framework change
+        self._press_key("space")
+        time.sleep(0.03)
+        self._press_key("backspace")
+        time.sleep(0.08)
 
-            # ── STEP 2: Directly focus the prompt textarea ──
-            # The prompt textarea in Google AI Studio is ALWAYS centered in the bottom of the left chat column.
-            # 48% width is safely between the + icon (left) and the microphone/send buttons (right).
-            click_x = chat_left + int(chat_width * 0.48)
-            click_y = chat_bottom - 75
-            logger.info(f"Directly focusing prompt textarea at ({click_x}, {click_y})")
-            pyautogui.click(click_x, click_y)
-            time.sleep(0.15)
+        # 6. Submit via Ctrl+Enter (built-in native shortcut for AI Studio)
+        logger.info("Submitting via Ctrl+Enter...")
+        self._press_hotkey("ctrl+enter")
+        time.sleep(0.2)
 
-            # Clear any existing text
-            self._press_hotkey("ctrl+a")
-            time.sleep(0.04)
-            self._press_key("backspace")
-            time.sleep(0.04)
+        # 7. Also click the Send button (bottom right of the chat pane)
+        send_x = chat_right - 40
+        send_y = chat_bottom - 45
+        logger.info(f"Clicking Send button at ({send_x}, {send_y})...")
+        pyautogui.click(send_x, send_y)
+        time.sleep(0.2)
 
-            # Paste the prompt
-            self._clipboard_set(prompt)
-            time.sleep(0.1)
-            self._press_hotkey("ctrl+v")
-            time.sleep(0.2)
-
-            # Trigger input change events so submit button activates
-            self._press_key("space")
-            time.sleep(0.03)
-            self._press_key("backspace")
-            time.sleep(0.15)
-
-            self._emit_status("typing", "Prompt entered. Submitting to Google AI Studio...")
-
-            # ── STEP 3: SUBMIT THE PROMPT ──
-            # Action 1: Ctrl+Enter (the primary, universal AI submit hotkey in AI Studio)
-            logger.info("Submitting via Ctrl+Enter...")
-            self._press_hotkey("ctrl+enter")
-            time.sleep(0.25)
-
-            # Action 2: Click the Send (up arrow) button at bottom-right of chat pane
-            send_x = chat_left + chat_width - 35
-            send_y = chat_bottom - 70
-            logger.info(f"Clicking Send button icon at ({send_x}, {send_y})...")
-            pyautogui.click(send_x, send_y)
-            time.sleep(0.25)
-
-            # Action 3: Enter key
-            self._press_key("enter")
-            time.sleep(0.2)
-
-            return f"✅ Prompt injected and submitted into Google AI Studio ({len(prompt)} chars)"
-
-        except ImportError:
-            logger.error("uiautomation not installed, falling back to coordinate-based submission")
-            return self._web_uia_fallback(prompt, hwnd)
-        except Exception as e:
-            logger.error(f"Web UIA injection encountered error: {e}, falling back to coordinate submit")
-            return self._web_uia_fallback(prompt, hwnd)
+        return f"✅ Prompt injected and submitted into Google AI Studio ({len(prompt)} chars)"
 
 
     def _web_uia_fallback(self, prompt: str, hwnd=None) -> str:
-        """Robust direct fallback: focuses chat textarea, pastes, and dispatches Ctrl+Enter + click Send."""
+        """Robust fallback: focuses chat textarea, pastes, dispatches Enter, Ctrl+Enter, and clicks Send button."""
         import pyautogui
         pyautogui.FAILSAFE = False
         import ctypes
@@ -1919,62 +1875,79 @@ class EditorBridge:
             w_width = w_right - w_left
             w_height = w_bottom - w_top
         else:
-            w_left, w_top, w_width, w_height = 0, 0, 1920, 1080
+            w_left, w_top, w_width, w_height = 0, 0, 1200, 800
 
         if hwnd:
             try:
                 user32.ShowWindow(hwnd, 3)
                 user32.SetForegroundWindow(hwnd)
-                time.sleep(0.2)
+                time.sleep(0.3)
             except Exception:
                 pass
 
-        chat_width = int(w_width * 0.42)
-
-        # 1. Dismiss any popups
-        self._press_key("escape")
-        time.sleep(0.15)
-
-        # 2. Click into Chat input area (center of chat pane, 75px from bottom)
-        input_x = w_left + int(chat_width * 0.48)
-        input_y = w_top + w_height - 75
+        # 1. Click into Chat input area (~35% from left, ~85px from bottom)
+        input_x = w_left + int(w_width * 0.35)
+        input_y = w_top + w_height - 85
         logger.info(f"Fallback: Clicking chat input area at ({input_x}, {input_y})")
         pyautogui.click(input_x, input_y)
-        time.sleep(0.15)
+        time.sleep(0.4)
 
-        # 3. Clear existing text
+        try:
+            import uiautomation as auto
+            root = auto.GetRootControl()
+            dialog = root.TextControl(searchDepth=14, Name="Select or upload a file")
+            if dialog.Exists(0.2, 0.05):
+                logger.warning("Fallback accidentally opened file upload dialog. Closing it and shifting click right.")
+                self._press_key("escape")
+                time.sleep(0.4)
+                input_x += 180
+                pyautogui.click(input_x, input_y)
+                time.sleep(0.2)
+        except Exception:
+            pass
+        # 2. Clear existing text
         self._press_hotkey("ctrl+a")
-        time.sleep(0.04)
+        time.sleep(0.08)
         self._press_key("backspace")
-        time.sleep(0.04)
+        time.sleep(0.08)
 
-        # 4. Paste prompt
+        # 3. Paste prompt
         self._clipboard_set(prompt)
-        time.sleep(0.1)
+        time.sleep(0.15)
         self._press_hotkey("ctrl+v")
+        time.sleep(0.3)
+
+        # 4. Trigger input change event
+        self._press_key("space")
+        time.sleep(0.05)
+        self._press_key("backspace")
         time.sleep(0.2)
 
-        # 5. Trigger input change event
-        self._press_key("space")
-        time.sleep(0.03)
-        self._press_key("backspace")
-        time.sleep(0.15)
+        # 5. SUBMIT VIA ENTER
+        logger.info("Fallback: Pressing Enter...")
+        self._press_key("enter")
+        time.sleep(0.3)
 
-        # 6. Submit via Ctrl+Enter
+        # 6. SUBMIT VIA CTRL+ENTER
         logger.info("Fallback: Pressing Ctrl+Enter...")
         self._press_hotkey("ctrl+enter")
-        time.sleep(0.25)
+        time.sleep(0.3)
 
-        # 7. Click Send button icon (at right edge of chat pane bottom)
-        send_x = w_left + chat_width - 35
-        send_y = w_top + w_height - 70
+        # 7. CLICK SEND BUTTON ICON (.send-button at ~38% width, ~65px from bottom)
+        send_x = w_left + int(w_width * 0.38)
+        send_y = w_top + w_height - 65
         logger.info(f"Fallback: Clicking Send button icon at ({send_x}, {send_y})")
         pyautogui.click(send_x, send_y)
-        time.sleep(0.25)
+        time.sleep(0.4)
 
-        # 8. Enter key
+        # 8. TAB + ENTER (Fallback for when coordinates miss and Ctrl+Enter fails)
+        logger.info("Fallback: Pressing Tab then Enter (to target Send button)...")
+        self._press_key("tab")
+        time.sleep(0.1)
         self._press_key("enter")
-        time.sleep(0.2)
+        time.sleep(0.1)
+        self._press_key("space")
+        time.sleep(0.3)
 
         return f"✅ Prompt injected and submitted into Google AI Studio ({len(prompt)} chars)"
 
@@ -2133,7 +2106,7 @@ class EditorBridge:
 
         Detection strategy:
         1. Check if editor window title contains 'thinking/generating' keywords
-        2. Monitor editor process CPU — high CPU = still working
+        2. Monitor editor process CPU -- high CPU = still working
         3. When title stabilizes AND CPU drops, conversation is done
         4. Fallback: timeout after _completion_timeout seconds
         """
@@ -2332,17 +2305,10 @@ class EditorBridge:
                     pass
         return []
 
-    def _check_google_ai_studio_generation(self, hwnd=None) -> Dict[str, Any]:
+    def _check_google_ai_studio_generation(self, hwnd=None, allow_ocr: bool = False) -> Dict[str, Any]:
         """
         Scans Google AI Studio chat screen to determine active generation status.
-        
-        Returns a dict:
-            is_generating: bool (True if 'Running for' or Stop button is present)
-            is_finished: bool (True if 'Ran for' or Send button is ready)
-            running_text: str (e.g. 'Running for 215s')
-            ran_text: str (e.g. 'Ran for 215s')
-            has_stop_btn: bool
-            has_send_btn: bool
+        Fast by default (depth <= 6); OCR is opt-in to eliminate background CPU spikes.
         """
         if get_playwright_manager:
             try:
@@ -2376,24 +2342,27 @@ class EditorBridge:
         if not hwnd:
             return info
 
-        # --- 1. UIA DOM Inspection ---
+        # --- 1. Fast UIA DOM Inspection ---
         try:
             import uiautomation as auto
             window = auto.ControlFromHandle(hwnd)
-            if not window or not window.Exists(0.5, 0.1):
+            if not window or not window.Exists(0.3, 0.1):
                 window = auto.WindowControl(searchDepth=1, handle=hwnd)
 
-            if window and window.Exists(0.5, 0.1):
-                doc = window.DocumentControl(searchDepth=4)
-                if doc and doc.Exists(0.5, 0.1):
+            if window and window.Exists(0.3, 0.1):
+                doc = window.DocumentControl(searchDepth=6)
+                if doc and doc.Exists(0.3, 0.1):
                     doc_rect = doc.BoundingRectangle
                     chat_right = (doc_rect.left + int(doc_rect.width * 0.45)) if doc_rect else 999999
                     chat_bottom = doc_rect.bottom if doc_rect else 999999
 
+                    nodes_scanned = 0
                     def scan_node(ctrl, depth=0):
-                        if depth > 4:
+                        nonlocal nodes_scanned
+                        if depth > 6 or nodes_scanned > 60:
                             return
                         try:
+                            nodes_scanned += 1
                             rect = ctrl.BoundingRectangle
                             # Restrict search strictly to the chat screen (left ~45%)
                             if rect and rect.left > chat_right + 40:
@@ -2437,9 +2406,8 @@ class EditorBridge:
         except Exception as e:
             logger.debug(f"UIA generation check error: {e}")
 
-        # --- 2. Throttled OCR Fallback / Verification ---
-        # If UIA hasn't definitively detected generation or completion, verify via OCR (throttled)
-        if not info["is_generating"] and not info["is_finished"] and self._should_run_ocr(4.0):
+        # --- 2. OCR Fallback ONLY if explicitly allowed ---
+        if not info["is_generating"] and not info["is_finished"] and allow_ocr:
             try:
                 ocr_lines = self._get_chat_ocr_lines(hwnd)
                 for line in ocr_lines:
@@ -2496,6 +2464,7 @@ class EditorBridge:
         logger.info("Starting Google AI Studio smart completion monitoring...")
 
         time.sleep(1.5)
+        last_ocr_time = time.time()
 
         while True:
             elapsed = time.time() - start_time
@@ -2510,8 +2479,9 @@ class EditorBridge:
                 logger.warning(f"Google AI Studio wait timed out after {timeout_limit}s")
                 return "timeout"
 
-            # 3. Error detection & Auto-rotation
-            web_errors = self.detect_google_ai_studio_errors(hwnd)
+            # 3. Error detection & Auto-rotation (throttled OCR every 8s to prevent CPU freeze)
+            should_ocr = (time.time() - last_ocr_time >= 8.0)
+            web_errors = self.detect_google_ai_studio_errors(hwnd, allow_ocr=should_ocr)
             pre_errors = getattr(self, "_pre_prompt_errors", set())
             new_errors = [e for e in web_errors if e not in pre_errors]
             if new_errors:
@@ -2529,8 +2499,10 @@ class EditorBridge:
                 self._emit_status("error", f"❌ AI Studio Error: {err_msg}")
                 return f"error: {err_msg}"
 
-            # 4. Check dynamic generation state
-            gen_state = self._check_google_ai_studio_generation(hwnd)
+            # 4. Check dynamic generation state (throttled OCR)
+            gen_state = self._check_google_ai_studio_generation(hwnd, allow_ocr=should_ocr)
+            if should_ocr:
+                last_ocr_time = time.time()
             is_generating = gen_state.get("is_generating", False)
             running_text = gen_state.get("running_text", "")
             ran_text = gen_state.get("ran_text", "")
@@ -2952,4 +2924,4 @@ if __name__ == "__main__":
     print(f"   Modes: clipboard | file_drop | terminal | auto_interact")
     for key, config in EditorBridge.EDITORS.items():
         hotkey = config.get('chat_hotkey', 'N/A')
-        print(f"   {config['icon']} {config['display']} ({key}) — chat: {hotkey}")
+        print(f"   {config['icon']} {config['display']} ({key}) -- chat: {hotkey}")
