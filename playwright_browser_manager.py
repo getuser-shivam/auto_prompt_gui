@@ -904,6 +904,45 @@ class PlaywrightBrowserManager:
         except Exception:
             return empty
 
+    def _auto_click_proceed(self, page, status_callback=None) -> bool:
+        """
+        Detects the Proceed / Approve / Continue buttons that AI Studio App Builder
+        shows when it generates a plan instead of directly executing.
+        Clicks Proceed automatically and waits for the follow-up generation to start.
+        Returns True if a Proceed button was found and clicked.
+        """
+        try:
+            clicked = page.evaluate("""() => {
+                // AI Studio App Builder shows Proceed/Revise/Reject after planning responses
+                const labels = ['proceed', 'approve', 'continue', 'apply', 'confirm', 'execute'];
+                // Try aria-label and text content
+                const allBtns = document.querySelectorAll('button, [role="button"]');
+                for (const btn of allBtns) {
+                    if (btn.disabled) continue;
+                    const text = (btn.textContent || '').trim().toLowerCase();
+                    const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    if (labels.some(l => text === l || label === l)) {
+                        // Make sure it's visible (not hidden or off-screen)
+                        const rect = btn.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) {
+                            btn.click();
+                            return {clicked: true, label: btn.textContent.trim()};
+                        }
+                    }
+                }
+                return {clicked: false};
+            }""")
+            if clicked and clicked.get("clicked"):
+                label = clicked.get("label", "Proceed")
+                logger.info(f"Auto-clicked plan action button: '{label}'")
+                if status_callback:
+                    status_callback("waiting", f"🔵 Clicked '{label}' — waiting for AI to implement...")
+                time.sleep(1.5)  # Let the new generation start
+                return True
+        except Exception as e:
+            logger.debug(f"_auto_click_proceed error: {e}")
+        return False
+
     def is_generating(self) -> Dict[str, Any]:
         """
         Inspects visible AI Studio DOM controls and status text for generation state.
@@ -1010,25 +1049,47 @@ class PlaywrightBrowserManager:
                     status_callback("waiting", f"🔵 AI is generating ({status_text})")
             else:
                 if was_generating:
-                    # Generation completed — was actively generating, now stopped
+                    # Generation finished — check for Proceed/Approve plan dialog first
+                    def _check_proceed(w: PlaywrightWorker) -> bool:
+                        return self._auto_click_proceed(w.active_page, status_callback)
+                    try:
+                        proceed_clicked = self._execute(_check_proceed, timeout=5.0)
+                    except Exception:
+                        proceed_clicked = False
+
+                    if proceed_clicked:
+                        # Reset state and keep waiting for the follow-up generation
+                        was_generating = False
+                        stable_idle_count = 0
+                        # Update baseline so completion detection works for the next round
+                        try:
+                            new_baseline = self._execute(
+                                lambda w: (w.active_page.locator("body").inner_text(timeout=1000)
+                                           if w.active_page else ""),
+                                timeout=4.0
+                            )
+                            if new_baseline:
+                                submission["baseline_body"] = new_baseline
+                                submission["baseline_status"] = ""
+                                submission["started_at"] = time.time()
+                        except Exception:
+                            pass
+                        continue  # Back to top of loop — wait for implementation
+
+                    # No proceed button — truly done
                     if status_callback:
-                        status_callback("waiting", "✅ Generation finished. Advancing immediately...")
-                    time.sleep(1.5)  # Brief settling delay
+                        status_callback("waiting", "✅ Generation finished. Advancing to next step...")
+                    time.sleep(1.5)
                     return "done"
                 else:
-                    # Not yet generating — could be:
-                    #   a) AI Studio is still loading the response (normal, give it time)
-                    #   b) The prompt wasn't actually submitted (rare edge case)
-                    # Use a generous 30s grace before deciding it failed.
+                    # Not yet generating — give it time
                     if not submitted_at:
-                        # Waiting for a pre-existing generation (before any send)
                         if elapsed > 2.5 and gen_state.get("has_send_btn", False):
                             return "done"
                     else:
                         observed = bool(gen_state.get("chat_changed") or new_finish_status)
                         if observed and gen_state.get("has_send_btn", False):
                             stable_idle_count += 1
-                            # Require 5 consecutive idle polls (5s) before declaring done
                             if new_finish_status or (submission_elapsed >= 8.0 and stable_idle_count >= 5):
                                 if "ran for 0s" in status_text.lower() or "ran for 0 s" in status_text.lower():
                                     errors = self.detect_errors(submission.get("baseline_body", ""))
@@ -1037,19 +1098,39 @@ class PlaywrightBrowserManager:
                                         if status_callback:
                                             status_callback("error", f"❌ AI Studio Error: {err_msg}")
                                         return f"error: {err_msg}"
+                                # Check for Proceed before declaring done
+                                def _check_proceed2(w: PlaywrightWorker) -> bool:
+                                    return self._auto_click_proceed(w.active_page, status_callback)
+                                try:
+                                    proceed_clicked = self._execute(_check_proceed2, timeout=5.0)
+                                except Exception:
+                                    proceed_clicked = False
+                                if proceed_clicked:
+                                    was_generating = False
+                                    stable_idle_count = 0
+                                    try:
+                                        new_baseline = self._execute(
+                                            lambda w: (w.active_page.locator("body").inner_text(timeout=1000)
+                                                       if w.active_page else ""),
+                                            timeout=4.0
+                                        )
+                                        if new_baseline:
+                                            submission["baseline_body"] = new_baseline
+                                            submission["started_at"] = time.time()
+                                    except Exception:
+                                        pass
+                                    continue
                                 if status_callback:
                                     status_callback("waiting", "✅ Generation finished. Advancing to the next step...")
                                 return "done"
                         else:
                             stable_idle_count = 0
-                        # Only fail-fast if we've waited 30s+ without ANY sign of generation
                         if submission_elapsed >= 30.0 and not observed and not was_generating:
                             if status_callback:
                                 status_callback("error", "⚠️ AI Studio did not start generating within 30s. Retrying...")
                             return "error: Prompt submission was not confirmed by AI Studio. The chat input may not have received the text."
 
             time.sleep(1.0)
-
 
     def detect_errors(self, baseline_body: str = "") -> List[str]:
         """Detect new visible errors, including quota notices rendered inside the chat."""
