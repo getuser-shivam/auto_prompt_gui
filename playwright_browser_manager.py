@@ -312,67 +312,101 @@ class PlaywrightBrowserManager:
         except Exception:
             return None
 
+    @staticmethod
+    def _is_process_running(exe_name: str) -> bool:
+        """Check if a process is running without killing it."""
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=5
+            )
+            return exe_name.lower() in result.stdout.lower()
+        except Exception:
+            return False
+
     def launch_ai_studio_browser(self, url: str = "https://aistudio.google.com/") -> bool:
-
         """
-        Open Google AI Studio at the exact URL using the user's real browser profile.
+        Stable browser connection for Google AI Studio.
 
-        Strategy (simplest first):
-        1. If already connected via Playwright — just navigate to URL.
-        2. Try Firefox with user's real profile via launch_persistent_context (no CDP needed,
-           no killing required — Firefox can run multiple contexts against the same profile).
-        3. Fall back to Chrome with CDP (kills Chrome first to free profile lock).
+        Rules:
+        - NEVER open a new browser or navigate if already correctly connected.
+        - NEVER try Firefox if Firefox is already running (causes conflict dialogs).
+        - NEVER kill Chrome unless it's confirmed not at the right URL and CDP can't attach.
+        - Only open a fresh browser once per session (tracked by _browser_launch_attempted).
+        - Check before acting: already open at the URL? → connect and reuse, no navigation.
         """
-        # 1. Already connected — just navigate
+        target_url = (url or "https://aistudio.google.com/").strip()
+        target_base = target_url.split("?")[0].rstrip("/")
+
+        # ── STEP 1: Already connected to a Playwright page ──────────────────────
+        # Check if we're on the right URL. If yes → done. If no → navigate once.
         if self.is_connected():
             try:
-                def _nav(w: PlaywrightWorker) -> bool:
+                def _check_and_nav(w: PlaywrightWorker) -> bool:
                     page = w.active_page
                     if not page:
                         return False
-                    cur = (page.url or "").lower()
-                    if url and url.rstrip("/") not in cur:
-                        logger.info(f"Already connected — navigating to: {url}")
+                    current = (page.url or "").split("?")[0].rstrip("/")
+                    if current == target_base or "aistudio.google.com" in (page.url or "").lower():
+                        logger.info(f"Already connected at correct URL: {page.url}")
+                        return True  # No navigation needed
+                    # Wrong page — navigate once
+                    logger.info(f"Connected but wrong URL ({page.url}). Navigating to: {target_url}")
+                    try:
+                        page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+                    except Exception as e:
+                        logger.warning(f"Navigation failed: {e}")
+                    return "aistudio.google.com" in (page.url or "").lower()
+                return bool(self._execute(_check_and_nav, timeout=35.0))
+            except Exception:
+                pass
+
+        # ── STEP 2: Try CDP on Chrome (no-op if Chrome already has it) ───────────
+        if self.connect_cdp():
+            logger.info("Attached to existing Chrome CDP session.")
+            try:
+                def _navigate_if_needed(w: PlaywrightWorker) -> bool:
+                    page = w.active_page
+                    if not page:
+                        return False
+                    current_base = (page.url or "").split("?")[0].rstrip("/")
+                    if current_base == target_base:
+                        logger.info(f"Chrome already at correct URL: {page.url} — no navigation.")
+                        return True
+                    if "aistudio.google.com" in (page.url or "").lower():
+                        # On AI Studio but different app — navigate
+                        logger.info(f"Navigating Chrome from {page.url} → {target_url}")
                         try:
-                            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                            page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
                         except Exception as e:
                             logger.warning(f"Navigation failed: {e}")
                     return "aistudio.google.com" in (page.url or "").lower()
-                return bool(self._execute(_nav, timeout=35.0))
+                return bool(self._execute(_navigate_if_needed, timeout=35.0))
             except Exception:
                 pass
 
-        # 2. Try connecting to existing Chrome CDP first (fastest if already running)
-        if self.connect_cdp():
-            try:
-                def _navigate_existing(w: PlaywrightWorker) -> bool:
-                    page = w.active_page
-                    if not page:
-                        return False
-                    if url and (url.rstrip("/") not in (page.url or "")):
-                        try:
-                            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                        except Exception as nav_e:
-                            logger.warning(f"Navigation to {url} failed: {nav_e}")
-                    return "aistudio.google.com" in (page.url or "").lower()
-                return bool(self._execute(_navigate_existing, timeout=35.0))
-            except Exception:
-                pass
+        # ── Already tried once this session? Don't try again. ───────────────────
+        if getattr(self, "_browser_launch_attempted", False):
+            logger.info("Browser launch already attempted this session — skipping relaunch.")
+            return False
+        self._browser_launch_attempted = True
 
-        # 3. Try Firefox with the user's real profile (they are already logged in there).
-        #    Playwright's launch_persistent_context opens a fresh window while the user's
-        #    Firefox keeps running — no killing, no profile locking issues.
-        firefox_profile = self._find_firefox_profile()
-        firefox_paths = [
+        # ── STEP 3: Try Firefox ONLY if it is NOT already running ───────────────
+        firefox_running = self._is_process_running("firefox.exe")
+        firefox_exe = None
+        for p in [
             r"C:\Program Files\Mozilla Firefox\firefox.exe",
             r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
             os.path.expandvars(r"%LOCALAPPDATA%\Mozilla Firefox\firefox.exe"),
-        ]
-        firefox_exe = next((p for p in firefox_paths if os.path.isfile(p)), None)
+        ]:
+            if os.path.isfile(p):
+                firefox_exe = p
+                break
 
-        if firefox_exe and firefox_profile:
-            logger.info(f"Launching Firefox with real profile at: {firefox_profile}")
-            target_url = url or "https://aistudio.google.com/"
+        firefox_profile = self._find_firefox_profile()
+
+        if firefox_exe and firefox_profile and not firefox_running:
+            logger.info(f"Firefox not running — launching with real profile: {firefox_profile}")
 
             def _launch_firefox(w: PlaywrightWorker) -> bool:
                 try:
@@ -380,36 +414,31 @@ class PlaywrightBrowserManager:
                         user_data_dir=firefox_profile,
                         executable_path=firefox_exe,
                         headless=False,
-                        args=["--new-instance"],
                         no_viewport=True,
                     )
-                    # Use an existing page or open a new one
                     page = context.pages[0] if context.pages else context.new_page()
                     logger.info(f"Navigating Firefox to: {target_url}")
                     page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-
                     session_id = w.active_session_id or "default"
                     w.context = context
                     w.pages[session_id] = page
                     w.active_page = page
                     w._connected = True
-                    logger.info(f"Firefox launched and connected. URL: {page.url}")
+                    logger.info(f"✅ Firefox connected at: {page.url}")
                     return "aistudio.google.com" in (page.url or "").lower()
                 except Exception as e:
-                    logger.warning(f"Firefox persistent context launch failed: {e}")
+                    logger.warning(f"Firefox launch failed: {e}")
                     return False
 
             try:
-                connected = bool(self._execute(_launch_firefox, timeout=45.0))
-                if connected:
-                    logger.info("✅ Firefox with real profile connected! Full DOM control active.")
+                if bool(self._execute(_launch_firefox, timeout=45.0)):
                     return True
-                logger.warning("Firefox launched but could not confirm AI Studio page.")
             except Exception as e:
                 logger.warning(f"Firefox launch error: {e}")
+        elif firefox_running:
+            logger.info("Firefox is already running — skipping Firefox launch to avoid conflict.")
 
-        # 4. Fall back to Chrome with CDP (kill existing Chrome first to free profile)
-        logger.info("Firefox not available or failed — falling back to Chrome CDP...")
+        # ── STEP 4: Chrome CDP — kill only if not already at right URL ───────────
         chrome_paths = [
             os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
             os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
@@ -418,24 +447,22 @@ class PlaywrightBrowserManager:
         ]
         exe = next((p for p in chrome_paths if os.path.exists(p)), None)
         if not exe:
-            logger.error("Neither Firefox, Google Chrome, nor Microsoft Edge was found.")
+            logger.warning("No Chrome/Edge found. Cannot launch browser.")
             return False
 
+        is_edge = "msedge.exe" in exe.lower()
+        exe_name = "msedge.exe" if is_edge else "chrome.exe"
         real_profile = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
         fallback_profile = os.path.expanduser(r"~\.ai_studio_chrome_profile")
-        is_edge = "msedge.exe" in exe.lower()
+        profile_dir = real_profile if os.path.isdir(real_profile) and not is_edge else fallback_profile
 
-        if os.path.isdir(real_profile) and not is_edge:
-            profile_dir = real_profile
-            killed = self.kill_chrome_processes("chrome.exe")
+        # Only kill Chrome if it's running (so we can relaunch with CDP)
+        if self._is_process_running(exe_name):
+            killed = self.kill_chrome_processes(exe_name)
             if killed:
-                logger.info(f"Killed {killed} Chrome instance(s) to allow CDP relaunch with real profile.")
-        else:
-            profile_dir = fallback_profile
-            if is_edge:
-                self.kill_chrome_processes("msedge.exe")
+                logger.info(f"Killed {killed} {exe_name} process(es) to enable CDP relaunch.")
+        
         os.makedirs(profile_dir, exist_ok=True)
-
         cmd = [
             exe,
             f"--remote-debugging-port={self.cdp_port}",
@@ -443,34 +470,36 @@ class PlaywrightBrowserManager:
             "--no-first-run",
             "--no-default-browser-check",
             "--profile-directory=Default",
-            url or "https://aistudio.google.com/",
+            target_url,
         ]
 
-        logger.info(f"Launching Chrome/Edge with CDP on port {self.cdp_port}...")
+        logger.info(f"Launching {exe_name} with CDP on port {self.cdp_port}...")
         try:
             proc = subprocess.Popen(cmd)
             self._browser_proc = proc
             for attempt in range(20):
                 time.sleep(1.0)
                 if self.connect_cdp():
-                    logger.info(f"Chrome CDP connected after {attempt+1}s!")
+                    logger.info(f"✅ Chrome CDP connected after {attempt+1}s!")
                     return True
             logger.warning("Chrome launched but CDP timed out after 20s.")
             return False
         except Exception as e:
-            logger.error(f"Failed to launch browser: {e}")
+            logger.error(f"Failed to launch {exe_name}: {e}")
             return False
-
 
 
     def ensure_page(self) -> bool:
         """Ensure active_page is valid and on Google AI Studio."""
         if self.is_connected():
+            self._browser_launch_attempted = False  # Reset so crash recovery works
             return True
         # Try auto-connecting to existing CDP
         if self.connect_cdp():
+            self._browser_launch_attempted = False
             return True
         return False
+
 
     def get_url(self) -> str:
         """Get the current URL of the active page."""
