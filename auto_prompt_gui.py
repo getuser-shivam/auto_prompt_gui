@@ -1618,8 +1618,24 @@ class AutoPromptGUI:
             )
             b.mode = target.get("mode", self._mode_var.get() if hasattr(self, "_mode_var") else "clipboard")
             b.on_status_change = lambda status, detail, name=wf_name: self._on_workflow_bridge_status(name, status, detail)
+            # Set the workflow-specific browser URL so Playwright navigates to the right page
+            browser_url = target.get("browser_url", "")
+            if not browser_url and wf_name == "iPortfolio":
+                browser_url = "https://aistudio.google.com/u/1/apps/c3190ca2-5e09-4827-9b56-bf05b56b8a91?showPreview=true&showAssistant=true"
+            if browser_url:
+                b.detected_browser_url = browser_url
             self.bridges[wf_name] = b
+        else:
+            # Refresh the URL on existing bridge in case it changed
+            b = self.bridges[wf_name]
+            target = self._workflow_target_settings.get(wf_name, {})
+            browser_url = target.get("browser_url", "")
+            if not browser_url and wf_name == "iPortfolio":
+                browser_url = "https://aistudio.google.com/u/1/apps/c3190ca2-5e09-4827-9b56-bf05b56b8a91?showPreview=true&showAssistant=true"
+            if browser_url:
+                b.detected_browser_url = browser_url
         return self.bridges[wf_name]
+
 
     def _run_workflow(self):
         try:

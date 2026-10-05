@@ -803,14 +803,19 @@ class EditorBridge:
         if self._editor == "groq":
             return self._send_via_clipboard(prompt) + " (Groq Virtual Editor Mode)"
 
-        # Prefer the workflow's own DOM-connected AI Studio tab. Launch the managed
-        # browser only when no ordinary browser window is available to use as fallback.
+        # Prefer the workflow's own DOM-connected AI Studio tab.
+        # ALWAYS try to connect Playwright when not already connected — even if a
+        # browser window exists. The existing window is likely plain Firefox which
+        # needs Playwright's launch_persistent_context to get DOM control.
         if self._editor == "google_ai_studio" and get_playwright_manager:
             try:
                 pw = get_playwright_manager(self.browser_session_id)
-                if not pw.ensure_page() and not self._find_editor_window():
-                    self._emit_status("waiting", "Opening a managed AI Studio browser tab...")
-                    pw.launch_ai_studio_browser("https://aistudio.google.com/")
+                if not pw.ensure_page():
+                    # Get the workflow-specific URL (iPortfolio, etc.)
+                    browser_url = getattr(self, "detected_browser_url", None) or "https://aistudio.google.com/"
+                    self._emit_status("waiting", f"Connecting Playwright to AI Studio ({browser_url})...")
+                    self._log(f"Playwright not connected. Launching browser at: {browser_url}", "info")
+                    pw.launch_ai_studio_browser(browser_url)
                 if pw.is_connected():
                     state = pw.get_chat_status()
                     if state.get("is_ai_studio") and state.get("chat_ready"):
@@ -827,6 +832,7 @@ class EditorBridge:
                 raise
             except Exception as e:
                 logger.warning(f"Playwright AI Studio connection failed: {e}")
+
 
         # 1. Find and focus the editor window
         hwnd = self._find_editor_window()
