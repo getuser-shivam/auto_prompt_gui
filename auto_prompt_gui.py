@@ -2098,6 +2098,7 @@ class AutoPromptGUI:
 
         if get_playwright_manager:
             pw = get_playwright_manager(self._get_bridge().browser_session_id)
+            pw._browser_launch_attempted = False  # User clicked button: always force fresh CDP setup
             self._log(f"Launching/Connecting to automated Google AI Studio browser ({url})...", "info")
             def _bg_launch():
                 connected = pw.launch_ai_studio_browser(url)
@@ -2113,6 +2114,7 @@ class AutoPromptGUI:
             self._log(f"Opening Google AI Studio: {url}", "success")
             import webbrowser
             webbrowser.open(url)
+
 
     def _on_mode_change(self, event=None):
         mode = self._mode_var.get()
