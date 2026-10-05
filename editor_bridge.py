@@ -2516,6 +2516,77 @@ class EditorBridge:
         gen_state = self._check_google_ai_studio_generation(hwnd)
         return bool(gen_state.get("is_generating", False))
 
+    def _click_proceed_uia(self, hwnd=None) -> bool:
+        """
+        Scan the browser window UIA tree for an AI Studio plan action button
+        (Proceed / Continue / Apply / Confirm) and click it.
+        Called after generation finishes to handle plan dialogs automatically.
+        Returns True if a button was found and clicked.
+        """
+        proceed_labels = {"proceed", "continue", "apply", "confirm", "approve", "execute"}
+        try:
+            import pyautogui
+            # Try UIA tree scan first
+            try:
+                import uiautomation as auto
+                root = auto.ControlFromHandle(hwnd) if hwnd else auto.GetRootControl()
+                queue = [(root, 0)]
+                while queue:
+                    node, depth = queue.pop(0)
+                    if depth > 10:
+                        continue
+                    try:
+                        ctrl_type = getattr(node, "ControlType", None)
+                        name = (getattr(node, "Name", None) or "").strip().lower()
+                        if ctrl_type == auto.ControlType.ButtonControl and name in proceed_labels:
+                            rect = node.BoundingRectangle
+                            cx = rect.left + rect.width() // 2
+                            cy = rect.top + rect.height() // 2
+                            if cx > 0 and cy > 0:
+                                logger.info(f"UIA: found plan button '{name}' at ({cx},{cy}) — clicking")
+                                pyautogui.click(cx, cy)
+                                time.sleep(0.3)
+                                return True
+                    except Exception:
+                        pass
+                    try:
+                        for child in node.GetChildren():
+                            queue.append((child, depth + 1))
+                    except Exception:
+                        pass
+            except Exception as uia_err:
+                logger.debug(f"UIA proceed scan error: {uia_err}")
+
+            # Fallback: OCR scan for "Proceed" text location
+            try:
+                if hwnd:
+                    import win32gui
+                    rect = win32gui.GetWindowRect(hwnd)
+                    w_left, w_top, w_right, w_bottom = rect
+                    import PIL.ImageGrab as ImageGrab
+                    screenshot = ImageGrab.grab(bbox=(w_left, w_top, w_right, w_bottom))
+                    import pytesseract
+                    data = pytesseract.image_to_data(screenshot, output_type=pytesseract.Output.DICT)
+                    words = data.get("text", [])
+                    for i, word in enumerate(words):
+                        if word.strip().lower() in proceed_labels:
+                            x1 = data["left"][i]
+                            y1 = data["top"][i]
+                            w = data["width"][i]
+                            h = data["height"][i]
+                            cx = w_left + x1 + w // 2
+                            cy = w_top + y1 + h // 2
+                            logger.info(f"OCR: found proceed button '{word}' at ({cx},{cy}) — clicking")
+                            pyautogui.click(cx, cy)
+                            time.sleep(0.3)
+                            return True
+            except Exception as ocr_err:
+                logger.debug(f"OCR proceed fallback error: {ocr_err}")
+
+        except Exception as e:
+            logger.debug(f"_click_proceed_uia error: {e}")
+        return False
+
     def _wait_for_google_ai_studio_completion(self, hwnd=None) -> str:
         """
         Specialized completion tracker for Google AI Studio.
@@ -2605,13 +2676,24 @@ class EditorBridge:
             else:
                 # Generation is not currently active
                 if was_generating:
-                    # Case A: Was generating, and NOW stopped (completed or pre-ended!)
+                    # Case A: Was generating, NOW stopped — check for plan dialog first
+                    proceed_clicked = self._click_proceed_uia(hwnd)
+                    if proceed_clicked:
+                        # Plan dialog: reset and wait for the implementation generation
+                        self._log("Auto-clicked 'Proceed' — waiting for AI to implement plan...", "info")
+                        self._emit_status("waiting", "🔵 Clicked 'Proceed' — waiting for implementation...")
+                        was_generating = False
+                        stable_idle_count = 0
+                        time.sleep(2.0)  # Let new generation start
+                        continue
+                    # No plan dialog — truly done
                     finish_label = ran_text or f"Finished in {int(elapsed)}s"
                     self._log(f"Google AI Studio generation complete: {finish_label}", "success")
                     self._emit_status("waiting", f"✅ Generation finished ({finish_label}). Advancing...")
-                    logger.info(f"Google AI Studio completed: {finish_label}. Advancing without delay.")
-                    time.sleep(1.5)  # Brief settling delay ("start without wasting time: be smart")
+                    logger.info(f"Google AI Studio completed: {finish_label}.")
+                    time.sleep(1.5)
                     return "done"
+
                 else:
                     # Case B: Was not yet marked generating
                     if elapsed < initial_grace_period:
