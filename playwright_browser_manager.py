@@ -698,94 +698,95 @@ class PlaywrightBrowserManager:
 
             # 1. Bring tab to front
             page.bring_to_front()
-            time.sleep(0.3)
+            time.sleep(0.4)
 
             if "aistudio.google.com" not in (page.url or "").lower():
-                raise RuntimeError(f"The AI Studio chat session changed to another page: {page.url}")
+                raise RuntimeError(f"The AI Studio chat session changed: {page.url}")
 
-            # 2. Use JavaScript to find the chat input and inject text directly.
-            #    This is the most reliable approach for Angular/React contenteditable divs —
-            #    fill() doesn't trigger framework change detection, so send button stays disabled.
+            # 2. Find the chat input element via JS, focus it, then inject text.
+            #    Uses document.execCommand('insertText') — the most reliable approach for Angular
+            #    because it goes through the native browser text-input pipeline, triggering ALL
+            #    framework event listeners (Angular, React, etc.) automatically.
             injected = page.evaluate("""(prompt) => {
-                // Try progressively broader selectors to find the chat input
                 const selectors = [
                     'div[contenteditable="true"][aria-label*="Make changes" i]',
                     'div[contenteditable="true"][aria-label*="ask for anything" i]',
                     'ms-prompt-input div[contenteditable="true"]',
                     'ms-autosize-textarea div[contenteditable="true"]',
                     'div[contenteditable="true"][role="textbox"]',
-                    'div[contenteditable="true"]',
                     'textarea[placeholder*="Make changes" i]',
                     'textarea[placeholder*="ask for anything" i]',
-                    'textarea[placeholder*="prompt" i]',
+                    'div[contenteditable="true"]',
+                    'textarea',
                 ];
 
                 let el = null;
+                // Prefer element in left panel (chat side), not the preview
                 for (const sel of selectors) {
-                    const found = document.querySelector(sel);
-                    if (found) {
-                        // Make sure it's actually visible and in the left panel (x < 50% of viewport)
+                    for (const found of document.querySelectorAll(sel)) {
                         const rect = found.getBoundingClientRect();
-                        if (rect.width > 50 && rect.height > 10 && rect.right < window.innerWidth * 0.7) {
+                        if (rect.width > 50 && rect.height > 5 && rect.right < window.innerWidth * 0.65) {
                             el = found;
                             break;
                         }
                     }
+                    if (el) break;
                 }
-                // Fallback: pick ANY visible contenteditable if nothing else found
+                // Absolute fallback: any visible contenteditable
                 if (!el) {
-                    const all = document.querySelectorAll('div[contenteditable="true"], textarea');
-                    for (const candidate of all) {
-                        const rect = candidate.getBoundingClientRect();
-                        if (rect.width > 50 && rect.height > 10) {
-                            el = candidate;
-                            break;
-                        }
+                    for (const found of document.querySelectorAll('div[contenteditable="true"], textarea')) {
+                        const rect = found.getBoundingClientRect();
+                        if (rect.width > 50 && rect.height > 5) { el = found; break; }
                     }
                 }
-                if (!el) return {ok: false, error: "No chat input found in DOM"};
+                if (!el) return {ok: false, error: 'No chat input found in DOM'};
 
-                // Focus and click the element
+                // Focus and select-all to replace any existing text
                 el.focus();
                 el.click();
+                document.execCommand('selectAll', false, null);
 
-                // Set content based on element type
-                if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-                    // Standard input: use native value setter to bypass React's synthetic events
-                    const nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLTextAreaElement.prototype, 'value') ||
-                        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-                    if (nativeSetter && nativeSetter.set) {
-                        nativeSetter.set.call(el, prompt);
+                // Insert text using execCommand — triggers Angular/React change detection natively
+                const inserted = document.execCommand('insertText', false, prompt);
+
+                if (!inserted) {
+                    // execCommand fallback: set innerText + fire events manually
+                    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+                        const desc = Object.getOwnPropertyDescriptor(
+                            Object.getPrototypeOf(el), 'value');
+                        if (desc && desc.set) desc.set.call(el, prompt);
+                        else el.value = prompt;
                     } else {
-                        el.value = prompt;
+                        el.innerText = prompt;
                     }
-                } else {
-                    // Contenteditable div: set innerHTML and innerText
-                    el.innerText = prompt;
+                    // Fire the full Angular event chain
+                    ['input','change','keyup','keydown','compositionend'].forEach(t => {
+                        el.dispatchEvent(new Event(t, {bubbles: true, cancelable: true}));
+                    });
+                    try {
+                        el.dispatchEvent(new InputEvent('input', {
+                            bubbles: true, data: prompt, inputType: 'insertText'
+                        }));
+                    } catch(e) {}
                 }
 
-                // Dispatch events to trigger framework change detection
-                ['input', 'change', 'keyup', 'compositionend'].forEach(eventType => {
-                    el.dispatchEvent(new Event(eventType, {bubbles: true, cancelable: true}));
-                });
-                // Also dispatch an InputEvent for React
-                try {
-                    el.dispatchEvent(new InputEvent('input', {
-                        bubbles: true, cancelable: true,
-                        data: prompt, inputType: 'insertText'
-                    }));
-                } catch(e) {}
-
-                return {ok: true, tag: el.tagName, selector: el.className || el.id || 'contenteditable'};
+                const tag = el.tagName;
+                const content = el.tagName === 'TEXTAREA' ? el.value : el.innerText;
+                return {
+                    ok: content.trim().length > 0,
+                    usedExecCommand: inserted,
+                    tag: tag,
+                    contentLen: content.trim().length,
+                    error: content.trim().length === 0 ? 'Content empty after injection' : null
+                };
             }""", prompt)
 
             if not injected or not injected.get("ok"):
-                err = injected.get("error", "unknown") if injected else "evaluate failed"
+                err = (injected or {}).get("error", "evaluate failed")
                 raise RuntimeError(f"Could not inject text into chat input: {err}")
 
-            logger.info(f"Injected prompt via JS into: {injected.get('tag')} ({injected.get('selector')})")
-            time.sleep(0.3)
+            logger.info(f"Injected {len(prompt)} chars via {'execCommand' if injected.get('usedExecCommand') else 'fallback'} into {injected.get('tag')}")
+            time.sleep(0.5)
 
             # 3. Capture baseline for completion detection
             baseline_body = ""
@@ -795,50 +796,68 @@ class PlaywrightBrowserManager:
                 pass
             baseline_status = self._inspect_page(page).get("status_text", "")
 
-            # 4. Click the Send button (↑ arrow).
-            #    Use JS to find and click it — avoids coordinate guessing entirely.
+            # 4. Wait up to 3s for the send button to become enabled (injection may be async)
+            send_ready = False
+            for _ in range(6):
+                check = page.evaluate("""() => {
+                    const sels = [
+                        'button[aria-label="Send"]',
+                        'button[aria-label*="send" i]',
+                        'button[aria-label*="submit" i]',
+                    ];
+                    for (const s of sels) {
+                        const b = document.querySelector(s);
+                        if (b && !b.disabled) return true;
+                    }
+                    for (const b of document.querySelectorAll('button')) {
+                        if (b.disabled) continue;
+                        const t = b.textContent || '';
+                        const l = b.getAttribute('aria-label') || '';
+                        if (t.includes('arrow_upward') || l.toLowerCase().includes('send')) return true;
+                    }
+                    return false;
+                }""")
+                if check:
+                    send_ready = True
+                    break
+                time.sleep(0.5)
+
+            # 5. Click Send via JS
             sent = page.evaluate("""() => {
-                // Find the send/submit button — it's the arrow_upward button
-                const btnSelectors = [
+                const sels = [
                     'button[aria-label="Send"]',
                     'button[aria-label*="send" i]',
                     'button[aria-label*="submit" i]',
                     'button[data-testid="send-button"]',
                 ];
-                for (const sel of btnSelectors) {
-                    const btn = document.querySelector(sel);
-                    if (btn && !btn.disabled) {
-                        btn.click();
-                        return {ok: true, method: sel};
-                    }
+                for (const s of sels) {
+                    const b = document.querySelector(s);
+                    if (b && !b.disabled) { b.click(); return {ok: true, m: s}; }
                 }
-                // Look for button with mat-icon containing 'arrow_upward' text
-                const allBtns = document.querySelectorAll('button');
-                for (const btn of allBtns) {
-                    if (btn.disabled) continue;
-                    const text = btn.textContent || '';
-                    const label = btn.getAttribute('aria-label') || '';
-                    if (text.includes('arrow_upward') || label.toLowerCase().includes('send')) {
-                        btn.click();
-                        return {ok: true, method: 'text:arrow_upward'};
+                for (const b of document.querySelectorAll('button')) {
+                    if (b.disabled) continue;
+                    const t = b.textContent || '';
+                    const l = b.getAttribute('aria-label') || '';
+                    if (t.includes('arrow_upward') || l.toLowerCase().includes('send')) {
+                        b.click();
+                        return {ok: true, m: 'arrow_upward'};
                     }
                 }
                 return {ok: false};
             }""")
 
             if not sent or not sent.get("ok"):
-                # Fallback: Ctrl+Enter on the input element
-                logger.warning("Send button not found via JS, trying Ctrl+Enter...")
+                logger.warning("Send button not found — pressing Enter on input element")
                 try:
-                    input_locator = self._visible_chat_input(page)
-                    if input_locator:
-                        input_locator.press("Control+Enter")
+                    inp = self._visible_chat_input(page)
+                    if inp:
+                        inp.press("Enter")
                     else:
-                        page.keyboard.press("Control+Enter")
+                        page.keyboard.press("Enter")
                 except Exception:
-                    page.keyboard.press("Control+Enter")
+                    page.keyboard.press("Enter")
             else:
-                logger.info(f"Send button clicked via JS ({sent.get('method')})")
+                logger.info(f"Send clicked via JS: {sent.get('m')}")
 
             w.submission_state[session_id] = {
                 "started_at": time.time(),
@@ -848,10 +867,10 @@ class PlaywrightBrowserManager:
             }
             usage = w.usage_state.setdefault(session_id, {"submitted": 0, "quota_switches": 0, "last_model": ""})
             usage["submitted"] += 1
+            return f"✅ Prompt injected via Playwright DOM ({len(prompt)} chars)"
 
-            return f"✅ Prompt injected directly via Playwright DOM ({len(prompt)} chars)"
+        return self._execute(_send, timeout=35.0)
 
-        return self._execute(_send, timeout=30.0)
 
 
     def get_chat_status(self) -> Dict[str, Any]:
