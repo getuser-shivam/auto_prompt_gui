@@ -2541,10 +2541,11 @@ class EditorBridge:
 
         start_time = time.time()
         was_generating = False
-        initial_grace_period = 4.0  # seconds to let request reach server & UI update
-        timeout_limit = max(getattr(self, "_completion_timeout", 300), 900)  # 15 mins for large coding tasks
+        initial_grace_period = 10.0  # Give AI Studio 10s to start generating before checking idle
+        timeout_limit = max(getattr(self, "_completion_timeout", 300), 900)
         poll_interval = getattr(self, "_poll_interval", 1.5)
         stable_idle_count = 0
+
 
         self._emit_status("waiting", "🔵 AI processing: Monitoring generation status...")
         logger.info("Starting Google AI Studio smart completion monitoring...")
@@ -2634,10 +2635,11 @@ class EditorBridge:
                             return "done"
                         elif has_send and not has_stop:
                             stable_idle_count += 1
-                            if stable_idle_count >= 3:
+                            if stable_idle_count >= 5:  # 5 consecutive idle polls before declaring done
                                 logger.info(f"Google AI Studio confirmed idle and ready ({int(elapsed)}s)")
                                 time.sleep(1.0)
                                 return "done"
+
                         else:
                             stable_idle_count = 0
                             self._emit_status("waiting", f"🔵 Waiting for AI response ({int(elapsed)}s)...")

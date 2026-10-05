@@ -1010,23 +1010,26 @@ class PlaywrightBrowserManager:
                     status_callback("waiting", f"🔵 AI is generating ({status_text})")
             else:
                 if was_generating:
-                    # Generation completed or pre-ended!
+                    # Generation completed — was actively generating, now stopped
                     if status_callback:
                         status_callback("waiting", "✅ Generation finished. Advancing immediately...")
-                    time.sleep(0.5)  # Brief settling delay
+                    time.sleep(1.5)  # Brief settling delay
                     return "done"
                 else:
+                    # Not yet generating — could be:
+                    #   a) AI Studio is still loading the response (normal, give it time)
+                    #   b) The prompt wasn't actually submitted (rare edge case)
+                    # Use a generous 30s grace before deciding it failed.
                     if not submitted_at:
-                        # This path waits for an already-running generation before a new send.
+                        # Waiting for a pre-existing generation (before any send)
                         if elapsed > 2.5 and gen_state.get("has_send_btn", False):
                             return "done"
                     else:
-                        # A response must be observed after the submit. Never report success
-                        # merely because the chat was idle before it started generating.
                         observed = bool(gen_state.get("chat_changed") or new_finish_status)
                         if observed and gen_state.get("has_send_btn", False):
                             stable_idle_count += 1
-                            if new_finish_status or (submission_elapsed >= 8.0 and stable_idle_count >= 3):
+                            # Require 5 consecutive idle polls (5s) before declaring done
+                            if new_finish_status or (submission_elapsed >= 8.0 and stable_idle_count >= 5):
                                 if "ran for 0s" in status_text.lower() or "ran for 0 s" in status_text.lower():
                                     errors = self.detect_errors(submission.get("baseline_body", ""))
                                     if errors:
@@ -1039,10 +1042,14 @@ class PlaywrightBrowserManager:
                                 return "done"
                         else:
                             stable_idle_count = 0
-                        if submission_elapsed >= 12.0 and not observed:
-                            return "error: Prompt submission was not confirmed by the AI Studio chat. Check the chat screen and send control."
+                        # Only fail-fast if we've waited 30s+ without ANY sign of generation
+                        if submission_elapsed >= 30.0 and not observed and not was_generating:
+                            if status_callback:
+                                status_callback("error", "⚠️ AI Studio did not start generating within 30s. Retrying...")
+                            return "error: Prompt submission was not confirmed by AI Studio. The chat input may not have received the text."
 
             time.sleep(1.0)
+
 
     def detect_errors(self, baseline_body: str = "") -> List[str]:
         """Detect new visible errors, including quota notices rendered inside the chat."""
