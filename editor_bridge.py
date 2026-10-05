@@ -1869,19 +1869,22 @@ class EditorBridge:
             click_y = input_rect.top + int(input_rect.height * 0.5)
             logger.info(f"Using UIA element coords: ({click_x}, {click_y})")
         else:
-            # Fallback: try multiple coordinate zones in the left chat pane
-            # AI Studio App Builder: left ~44% pane, textarea near bottom
-            # Try 4 positions from bottom-up (110px, 140px, 170px, 200px above bottom)
-            chat_pane_x = w_left + int(w_width * 0.22)  # Center of left 44% pane
+            # Fallback: coordinate zones for AI Studio App Builder left panel.
+            # The App Builder left panel is ~30% of window width (chat assistant area).
+            # The input "Make changes, add new features..." is at the very bottom of that panel.
+            # Center of left 30% panel = 15% from left edge.
+            # Input y: approximately 50px above the bottom toolbar row.
+            chat_pane_x = w_left + int(w_width * 0.15)  # Center of left 30% pane
             candidate_ys = [
-                w_top + w_height - 110,
-                w_top + w_height - 140,
-                w_top + w_height - 170,
-                w_top + w_height - 200,
+                w_top + w_height - 50,   # Very near bottom (input bar)
+                w_top + w_height - 75,
+                w_top + w_height - 100,
+                w_top + w_height - 130,
             ]
             click_x = chat_pane_x
             click_y = candidate_ys[0]
             logger.info(f"No UIA element found. Using coordinate fallback: ({click_x}, {click_y})")
+
 
         # 6. Dismiss any popup/modal
         self._press_key("escape")

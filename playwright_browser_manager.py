@@ -669,75 +669,147 @@ class PlaywrightBrowserManager:
 
             # 1. Bring tab to front
             page.bring_to_front()
+            time.sleep(0.3)
 
             if "aistudio.google.com" not in (page.url or "").lower():
                 raise RuntimeError(f"The AI Studio chat session changed to another page: {page.url}")
 
-            input_locator = self._visible_chat_input(page)
-            if not input_locator:
-                raise RuntimeError("Google AI Studio is open, but its chat input was not found. Open a chat screen and try again.")
+            # 2. Use JavaScript to find the chat input and inject text directly.
+            #    This is the most reliable approach for Angular/React contenteditable divs —
+            #    fill() doesn't trigger framework change detection, so send button stays disabled.
+            injected = page.evaluate("""(prompt) => {
+                // Try progressively broader selectors to find the chat input
+                const selectors = [
+                    'div[contenteditable="true"][aria-label*="Make changes" i]',
+                    'div[contenteditable="true"][aria-label*="ask for anything" i]',
+                    'ms-prompt-input div[contenteditable="true"]',
+                    'ms-autosize-textarea div[contenteditable="true"]',
+                    'div[contenteditable="true"][role="textbox"]',
+                    'div[contenteditable="true"]',
+                    'textarea[placeholder*="Make changes" i]',
+                    'textarea[placeholder*="ask for anything" i]',
+                    'textarea[placeholder*="prompt" i]',
+                ];
 
-            # ── DISABLE the file-upload + button so it can NEVER intercept clicks ──
-            try:
-                page.evaluate("""
-                    // Hide all attachment / file-upload buttons in the chat toolbar
-                    const selectors = [
-                        'button[aria-label*="upload" i]',
-                        'button[aria-label*="attach" i]',
-                        'button[aria-label*="file" i]',
-                        'button[aria-label*="image" i]',
-                        'button.add-attachment-button',
-                        'ms-prompt-actions button:first-child',
-                        'mat-toolbar button:first-child',
-                        'button.input-button:first-child',
-                    ];
-                    selectors.forEach(sel => {
-                        document.querySelectorAll(sel).forEach(el => {
-                            el.style.pointerEvents = 'none';
-                            el.style.opacity = '0.3';
-                            el.setAttribute('tabindex', '-1');
-                            el.setAttribute('data-disabled-by-bot', '1');
-                        });
-                    });
-                """)
-            except Exception:
-                pass
+                let el = null;
+                for (const sel of selectors) {
+                    const found = document.querySelector(sel);
+                    if (found) {
+                        // Make sure it's actually visible and in the left panel (x < 50% of viewport)
+                        const rect = found.getBoundingClientRect();
+                        if (rect.width > 50 && rect.height > 10 && rect.right < window.innerWidth * 0.7) {
+                            el = found;
+                            break;
+                        }
+                    }
+                }
+                // Fallback: pick ANY visible contenteditable if nothing else found
+                if (!el) {
+                    const all = document.querySelectorAll('div[contenteditable="true"], textarea');
+                    for (const candidate of all) {
+                        const rect = candidate.getBoundingClientRect();
+                        if (rect.width > 50 && rect.height > 10) {
+                            el = candidate;
+                            break;
+                        }
+                    }
+                }
+                if (!el) return {ok: false, error: "No chat input found in DOM"};
 
+                // Focus and click the element
+                el.focus();
+                el.click();
+
+                // Set content based on element type
+                if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+                    // Standard input: use native value setter to bypass React's synthetic events
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLTextAreaElement.prototype, 'value') ||
+                        Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+                    if (nativeSetter && nativeSetter.set) {
+                        nativeSetter.set.call(el, prompt);
+                    } else {
+                        el.value = prompt;
+                    }
+                } else {
+                    // Contenteditable div: set innerHTML and innerText
+                    el.innerText = prompt;
+                }
+
+                // Dispatch events to trigger framework change detection
+                ['input', 'change', 'keyup', 'compositionend'].forEach(eventType => {
+                    el.dispatchEvent(new Event(eventType, {bubbles: true, cancelable: true}));
+                });
+                // Also dispatch an InputEvent for React
+                try {
+                    el.dispatchEvent(new InputEvent('input', {
+                        bubbles: true, cancelable: true,
+                        data: prompt, inputType: 'insertText'
+                    }));
+                } catch(e) {}
+
+                return {ok: true, tag: el.tagName, selector: el.className || el.id || 'contenteditable'};
+            }""", prompt)
+
+            if not injected or not injected.get("ok"):
+                err = injected.get("error", "unknown") if injected else "evaluate failed"
+                raise RuntimeError(f"Could not inject text into chat input: {err}")
+
+            logger.info(f"Injected prompt via JS into: {injected.get('tag')} ({injected.get('selector')})")
+            time.sleep(0.3)
+
+            # 3. Capture baseline for completion detection
             baseline_body = ""
-            # Click the chat box directly using Playwright's exact element reference — no coordinates
-            input_locator.click()
-            input_locator.fill(prompt)
             try:
                 baseline_body = page.locator("body").inner_text(timeout=1000)
             except Exception:
                 pass
             baseline_status = self._inspect_page(page).get("status_text", "")
 
-            # Locate the enabled submit control (AI Studio renders this as an up arrow).
-            send_selectors = [
-                'button[aria-label="Send"]',
-                'button[aria-label*="Send prompt"]',
-                'button:has(mat-icon:text-is("arrow_upward"))',
-                'button:has-text("arrow_upward")',
-                'button.send-button',
-            ]
+            # 4. Click the Send button (↑ arrow).
+            #    Use JS to find and click it — avoids coordinate guessing entirely.
+            sent = page.evaluate("""() => {
+                // Find the send/submit button — it's the arrow_upward button
+                const btnSelectors = [
+                    'button[aria-label="Send"]',
+                    'button[aria-label*="send" i]',
+                    'button[aria-label*="submit" i]',
+                    'button[data-testid="send-button"]',
+                ];
+                for (const sel of btnSelectors) {
+                    const btn = document.querySelector(sel);
+                    if (btn && !btn.disabled) {
+                        btn.click();
+                        return {ok: true, method: sel};
+                    }
+                }
+                // Look for button with mat-icon containing 'arrow_upward' text
+                const allBtns = document.querySelectorAll('button');
+                for (const btn of allBtns) {
+                    if (btn.disabled) continue;
+                    const text = btn.textContent || '';
+                    const label = btn.getAttribute('aria-label') || '';
+                    if (text.includes('arrow_upward') || label.toLowerCase().includes('send')) {
+                        btn.click();
+                        return {ok: true, method: 'text:arrow_upward'};
+                    }
+                }
+                return {ok: false};
+            }""")
 
-            submitted = False
-            for sel in send_selectors:
-                s_loc = page.locator(sel).first
+            if not sent or not sent.get("ok"):
+                # Fallback: Ctrl+Enter on the input element
+                logger.warning("Send button not found via JS, trying Ctrl+Enter...")
                 try:
-                    if s_loc.is_visible(timeout=800):
-                        if not s_loc.is_enabled():
-                            continue
-                        s_loc.click()
-                        submitted = True
-                        break
+                    input_locator = self._visible_chat_input(page)
+                    if input_locator:
+                        input_locator.press("Control+Enter")
+                    else:
+                        page.keyboard.press("Control+Enter")
                 except Exception:
-                    pass
-
-            if not submitted:
-                # Fallback for layouts that expose no accessible send control.
-                input_locator.press("Control+Enter")
+                    page.keyboard.press("Control+Enter")
+            else:
+                logger.info(f"Send button clicked via JS ({sent.get('method')})")
 
             w.submission_state[session_id] = {
                 "started_at": time.time(),
@@ -751,6 +823,7 @@ class PlaywrightBrowserManager:
             return f"✅ Prompt injected directly via Playwright DOM ({len(prompt)} chars)"
 
         return self._execute(_send, timeout=30.0)
+
 
     def get_chat_status(self) -> Dict[str, Any]:
         """Return browser, chat, selected model and observed usage state for this workflow."""
