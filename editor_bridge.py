@@ -2518,34 +2518,52 @@ class EditorBridge:
 
     def _click_proceed_uia(self, hwnd=None) -> bool:
         """
-        Scan the browser window UIA tree for an AI Studio plan action button
-        (Proceed / Continue / Apply / Confirm) and click it.
-        Called after generation finishes to handle plan dialogs automatically.
-        Returns True if a button was found and clicked.
+        Detect and click the AI Studio App Builder 'Proceed' plan button.
+        Uses three strategies in order: UIA tree, PIL pixel scan, coordinate fallback.
+        Returns True if the button was found and clicked.
         """
         proceed_labels = {"proceed", "continue", "apply", "confirm", "approve", "execute"}
         try:
             import pyautogui
-            # Try UIA tree scan first
+            import win32gui
+
+            # Get browser window rect
+            w_left, w_top, w_right, w_bottom = (0, 0, 0, 0)
+            if hwnd:
+                try:
+                    w_left, w_top, w_right, w_bottom = win32gui.GetWindowRect(hwnd)
+                except Exception:
+                    pass
+            w_width = w_right - w_left
+            w_height = w_bottom - w_top
+
+            # ── Strategy 1: UIA tree scan ───────────────────────────────────────
             try:
                 import uiautomation as auto
                 root = auto.ControlFromHandle(hwnd) if hwnd else auto.GetRootControl()
                 queue = [(root, 0)]
                 while queue:
                     node, depth = queue.pop(0)
-                    if depth > 10:
+                    if depth > 12:
                         continue
                     try:
                         ctrl_type = getattr(node, "ControlType", None)
                         name = (getattr(node, "Name", None) or "").strip().lower()
-                        if ctrl_type == auto.ControlType.ButtonControl and name in proceed_labels:
-                            rect = node.BoundingRectangle
-                            cx = rect.left + rect.width() // 2
-                            cy = rect.top + rect.height() // 2
-                            if cx > 0 and cy > 0:
-                                logger.info(f"UIA: found plan button '{name}' at ({cx},{cy}) — clicking")
+                        # Match exact label OR partial match (e.g. "Proceed to implementation")
+                        matched = name in proceed_labels or any(
+                            lbl in name for lbl in proceed_labels
+                        )
+                        if ctrl_type == auto.ControlType.ButtonControl and matched:
+                            r = node.BoundingRectangle
+                            # Fix: BoundingRectangle has left/top/right/bottom, NOT width()/height()
+                            rw = r.right - r.left
+                            rh = r.bottom - r.top
+                            cx = r.left + rw // 2
+                            cy = r.top + rh // 2
+                            if cx > 0 and cy > 0 and rw > 10:
+                                logger.info(f"UIA proceed: '{name}' at ({cx},{cy})")
                                 pyautogui.click(cx, cy)
-                                time.sleep(0.3)
+                                time.sleep(0.5)
                                 return True
                     except Exception:
                         pass
@@ -2555,33 +2573,95 @@ class EditorBridge:
                     except Exception:
                         pass
             except Exception as uia_err:
-                logger.debug(f"UIA proceed scan error: {uia_err}")
+                logger.debug(f"UIA proceed scan: {uia_err}")
 
-            # Fallback: OCR scan for "Proceed" text location
-            try:
-                if hwnd:
-                    import win32gui
-                    rect = win32gui.GetWindowRect(hwnd)
-                    w_left, w_top, w_right, w_bottom = rect
-                    import PIL.ImageGrab as ImageGrab
-                    screenshot = ImageGrab.grab(bbox=(w_left, w_top, w_right, w_bottom))
-                    import pytesseract
-                    data = pytesseract.image_to_data(screenshot, output_type=pytesseract.Output.DICT)
-                    words = data.get("text", [])
-                    for i, word in enumerate(words):
-                        if word.strip().lower() in proceed_labels:
-                            x1 = data["left"][i]
-                            y1 = data["top"][i]
-                            w = data["width"][i]
-                            h = data["height"][i]
-                            cx = w_left + x1 + w // 2
-                            cy = w_top + y1 + h // 2
-                            logger.info(f"OCR: found proceed button '{word}' at ({cx},{cy}) — clicking")
-                            pyautogui.click(cx, cy)
-                            time.sleep(0.3)
+            # ── Strategy 2: PIL pixel scan — find "Proceed" button by color ───
+            # The Proceed button in AI Studio is a dark-filled primary button.
+            # Scan the bottom 40% of the left 35% of the window.
+            if w_width > 100 and w_height > 100:
+                try:
+                    from PIL import ImageGrab, Image
+                    # Only scan the left panel, bottom 40%
+                    scan_left = w_left
+                    scan_top = w_top + int(w_height * 0.60)
+                    scan_right = w_left + int(w_width * 0.35)
+                    scan_bottom = w_bottom
+                    img = ImageGrab.grab(bbox=(scan_left, scan_top, scan_right, scan_bottom))
+                    img_rgb = img.convert("RGB")
+                    width, height = img_rgb.size
+
+                    # Look for rows of pixels that are dark (filled button background)
+                    # Proceed button is typically dark (#1a73e8 blue or dark gray/black)
+                    found_rows = []
+                    for y in range(height - 5, max(0, height - 120), -1):
+                        dark_pixels = 0
+                        for x in range(5, min(width, 200)):
+                            r, g, b = img_rgb.getpixel((x, y))
+                            # Dark/filled button: low luminance or Google blue
+                            lum = (r * 299 + g * 587 + b * 114) // 1000
+                            if lum < 80 or (b > 150 and b > r * 1.3 and b > g * 1.1):
+                                dark_pixels += 1
+                        if dark_pixels > 30:
+                            found_rows.append(y)
+
+                    if found_rows:
+                        btn_y_local = found_rows[0]
+                        # Find horizontal center of the dark region in this row
+                        row_y = found_rows[0]
+                        dark_xs = []
+                        for x in range(5, min(width, 200)):
+                            r, g, b = img_rgb.getpixel((x, row_y))
+                            lum = (r * 299 + g * 587 + b * 114) // 1000
+                            if lum < 80 or (b > 150 and b > r * 1.3):
+                                dark_xs.append(x)
+                        if dark_xs:
+                            btn_cx = scan_left + (dark_xs[0] + dark_xs[-1]) // 2
+                            btn_cy = scan_top + btn_y_local
+                            logger.info(f"PIL scan: proceed button region at ({btn_cx},{btn_cy})")
+                            pyautogui.click(btn_cx, btn_cy)
+                            time.sleep(0.5)
                             return True
-            except Exception as ocr_err:
-                logger.debug(f"OCR proceed fallback error: {ocr_err}")
+                except Exception as pil_err:
+                    logger.debug(f"PIL proceed scan: {pil_err}")
+
+            # ── Strategy 3: Coordinate fallback ────────────────────────────────
+            # Only use if we can first confirm "plan" text is visible in the UIA tree
+            # (to avoid blindly clicking a random area when there's no plan dialog)
+            if w_width > 100 and w_height > 100:
+                plan_confirmed = False
+                try:
+                    import uiautomation as auto
+                    root = auto.ControlFromHandle(hwnd) if hwnd else auto.GetRootControl()
+                    queue = [(root, 0)]
+                    while queue and not plan_confirmed:
+                        node, depth = queue.pop(0)
+                        if depth > 8:
+                            continue
+                        try:
+                            name = (getattr(node, "Name", None) or "").lower()
+                            value = (getattr(node, "LegacyIAccessiblePattern", None) and "") or ""
+                            if any(kw in name for kw in ("plan", "proceed", "here's a plan", "build your app")):
+                                plan_confirmed = True
+                        except Exception:
+                            pass
+                        try:
+                            for child in node.GetChildren():
+                                queue.append((child, depth + 1))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                if plan_confirmed:
+                    cx = w_left + int(w_width * 0.12)
+                    cy = w_top + int(w_height * 0.87)
+                    logger.info(f"Coordinate fallback (plan confirmed): clicking ({cx},{cy})")
+                    pyautogui.click(cx, cy)
+                    time.sleep(0.5)
+                    return True
+                else:
+                    logger.debug("Coordinate fallback skipped — no plan dialog text found in UIA tree")
+
 
         except Exception as e:
             logger.debug(f"_click_proceed_uia error: {e}")
