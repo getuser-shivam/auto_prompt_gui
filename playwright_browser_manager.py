@@ -741,13 +741,23 @@ class PlaywrightBrowserManager:
                 }
                 if (!el) return {ok: false, error: 'No chat input found in DOM'};
 
-                // Focus and select-all to replace any existing text
+                // Focus the element — but do NOT use document.execCommand('selectAll')
+                // which selects the ENTIRE page. Instead use a Range scoped to this element only.
                 el.focus();
                 el.click();
-                document.execCommand('selectAll', false, null);
+
+                // Select all content within THIS element only (not the whole document)
+                try {
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                } catch(e) {}
 
                 // Insert text using execCommand — triggers Angular/React change detection natively
                 const inserted = document.execCommand('insertText', false, prompt);
+
 
                 if (!inserted) {
                     // execCommand fallback: set innerText + fire events manually

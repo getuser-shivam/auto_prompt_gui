@@ -1896,15 +1896,21 @@ class EditorBridge:
         time.sleep(0.15)
 
         # 8. Clear existing text and paste prompt
-        self._press_hotkey("ctrl+a")
+        #    Do NOT use ctrl+a — it selects the entire PAGE if focus is wrong.
+        #    Instead: use Ctrl+Shift+Home to select from cursor to start (scoped to element),
+        #    then delete. The input in AI Studio App Builder is usually already empty.
+        self._press_key("end")           # Move to end of existing text (if any)
         time.sleep(0.05)
-        self._press_key("backspace")
+        self._press_hotkey("ctrl+shift+home")   # Select all text back to start, within the focused field
+        time.sleep(0.05)
+        self._press_key("delete")        # Delete selection
         time.sleep(0.05)
 
         self._clipboard_set(prompt)
         time.sleep(0.1)
         self._press_hotkey("ctrl+v")
         time.sleep(0.15)
+
 
         # Trigger reactive framework change event
         self._press_key("space")
@@ -1991,11 +1997,15 @@ class EditorBridge:
                 time.sleep(0.2)
         except Exception:
             pass
-        # 2. Clear existing text
-        self._press_hotkey("ctrl+a")
+        # 2. Clear existing text — use Ctrl+Shift+Home (selects to start within focused field)
+        #    NOT ctrl+a which selects the entire page
+        self._press_key("end")
+        time.sleep(0.05)
+        self._press_hotkey("ctrl+shift+home")
+        time.sleep(0.05)
+        self._press_key("delete")
         time.sleep(0.08)
-        self._press_key("backspace")
-        time.sleep(0.08)
+
 
         # 3. Paste prompt
         self._clipboard_set(prompt)
@@ -2653,12 +2663,21 @@ class EditorBridge:
                     pass
 
                 if plan_confirmed:
-                    cx = w_left + int(w_width * 0.12)
-                    cy = w_top + int(w_height * 0.87)
-                    logger.info(f"Coordinate fallback (plan confirmed): clicking ({cx},{cy})")
-                    pyautogui.click(cx, cy)
-                    time.sleep(0.5)
-                    return True
+                    # Clamp y to exclude browser chrome (top ~80px = address bar/nav)
+                    # The content area starts after the chrome
+                    chrome_offset = 80  # pixels for browser UI (tab bar + address bar)
+                    content_top = w_top + chrome_offset
+                    content_height = w_height - chrome_offset
+                    if content_height < 100:
+                        logger.debug("Coordinate fallback: window too small, skipping")
+                    else:
+                        cx = w_left + int(w_width * 0.12)
+                        cy = content_top + int(content_height * 0.87)
+                        logger.info(f"Coordinate fallback (plan confirmed): clicking ({cx},{cy})")
+                        pyautogui.click(cx, cy)
+                        time.sleep(0.5)
+                        return True
+
                 else:
                     logger.debug("Coordinate fallback skipped — no plan dialog text found in UIA tree")
 
